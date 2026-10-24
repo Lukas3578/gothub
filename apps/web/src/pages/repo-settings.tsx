@@ -41,6 +41,7 @@ export function RepoSettingsLayout({
         <SettingsLink to={`${base}/branches`}>Branch-Schutz</SettingsLink>
         <SettingsLink to={`${base}/webhooks`}>Webhooks</SettingsLink>
         <SettingsLink to={`${base}/secrets`}>Secrets</SettingsLink>
+        <SettingsLink to={`${base}/mirrors`}>Spiegelung</SettingsLink>
         <SettingsLink to={`${base}/runners`}>Runner</SettingsLink>
       </nav>
 
@@ -51,6 +52,7 @@ export function RepoSettingsLayout({
           <Route path="branches" element={<BranchProtectionSettings repo={repo} />} />
           <Route path="webhooks" element={<WebhookSettings repo={repo} />} />
           <Route path="secrets" element={<SecretSettings repo={repo} />} />
+          <Route path="mirrors" element={<MirrorSettings repo={repo} />} />
           <Route path="runners" element={<RunnerSettings repo={repo} />} />
         </Routes>
       </div>
@@ -710,6 +712,303 @@ function SecretSettings({ repo }: { repo: RepositoryDetail }) {
               >
                 Löschen
               </Button>
+            </div>
+          ))
+        )}
+      </Panel>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Spiegelung auf andere Git-Hoster
+// ---------------------------------------------------------------------------
+
+interface MirrorEntry {
+  id: string;
+  direction: 'push' | 'pull';
+  remoteUrl: string;
+  remoteUsername: string | null;
+  hasToken: boolean;
+  isEnabled: boolean;
+  isExactCopy: boolean;
+  status: 'idle' | 'running' | 'success' | 'failure';
+  lastSyncAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+}
+
+const MIRROR_STATUS: Record<MirrorEntry['status'], { label: string; tone: string }> = {
+  idle: { label: 'wartet', tone: 'text-faint' },
+  running: { label: 'läuft', tone: 'text-accent' },
+  success: { label: 'erfolgreich', tone: 'text-success' },
+  failure: { label: 'fehlgeschlagen', tone: 'text-danger' },
+};
+
+function MirrorSettings({ repo }: { repo: RepositoryDetail }) {
+  const repoPath = `${repo.ownerName}/${repo.name}`;
+  const [items, setItems] = useState<MirrorEntry[] | null>(null);
+  const [version, setVersion] = useState(0);
+
+  const [direction, setDirection] = useState<'push' | 'pull'>('push');
+  const [remoteUrl, setRemoteUrl] = useState('');
+  const [remoteUsername, setRemoteUsername] = useState('');
+  const [token, setToken] = useState('');
+  const [isExactCopy, setIsExactCopy] = useState(false);
+
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  useEffect(() => {
+    api
+      .get<{ items: MirrorEntry[] }>(`/api/v1/repos/${repoPath}/mirrors`)
+      .then((d) => setItems(d.items))
+      .catch(() => setItems([]));
+  }, [repoPath, version]);
+
+  /** Gemeinsame Nutzlast von „Prüfen" und „Speichern". */
+  function payload() {
+    return {
+      direction,
+      remoteUrl: remoteUrl.trim(),
+      remoteUsername: remoteUsername.trim() || null,
+      token: token.trim() || null,
+    };
+  }
+
+  async function test() {
+    setError(null);
+    setNotice(null);
+    setBusy('test');
+    try {
+      const result = await api.post<{ ok: boolean; refCount?: number; error?: string }>(
+        `/api/v1/repos/${repoPath}/mirrors/test`,
+        payload(),
+      );
+      if (result.ok) {
+        setNotice(
+          `Verbindung steht. Die Gegenseite meldet ${result.refCount ?? 0} Referenzen (Branches und Tags).`,
+        );
+      } else {
+        setError(result.error ?? 'Die Gegenseite war nicht erreichbar.');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Prüfung fehlgeschlagen.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setError(null);
+    setNotice(null);
+    setBusy('save');
+    try {
+      await api.put(`/api/v1/repos/${repoPath}/mirrors`, { ...payload(), isExactCopy });
+      setRemoteUrl('');
+      setRemoteUsername('');
+      setToken('');
+      setIsExactCopy(false);
+      setNotice(
+        direction === 'push'
+          ? 'Spiegelung eingerichtet. Ab dem nächsten Push wird automatisch weitergeschoben.'
+          : 'Spiegelung eingerichtet. Die Gegenseite wird alle paar Minuten abgeholt.',
+      );
+      setVersion((value) => value + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function sync(id: string) {
+    setError(null);
+    setNotice(null);
+    setBusy(id);
+    try {
+      const result = await api.post<{ ok: boolean; error?: string }>(
+        `/api/v1/repos/${repoPath}/mirrors/${id}/sync`,
+        {},
+      );
+      if (!result.ok) setError(result.error ?? 'Übertragung fehlgeschlagen.');
+      else setNotice('Übertragung abgeschlossen.');
+      setVersion((value) => value + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Übertragung fehlgeschlagen.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function toggle(entry: MirrorEntry, enabled: boolean) {
+    setError(null);
+    try {
+      // Ohne `token` bleibt das hinterlegte Token unverändert – nur der
+      // Schalter wird geschrieben.
+      await api.put(`/api/v1/repos/${repoPath}/mirrors`, {
+        direction: entry.direction,
+        remoteUrl: entry.remoteUrl,
+        remoteUsername: entry.remoteUsername,
+        isEnabled: enabled,
+        isExactCopy: entry.isExactCopy,
+      });
+      setVersion((value) => value + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Änderung fehlgeschlagen.');
+    }
+  }
+
+  const existing = new Set((items ?? []).map((entry) => entry.direction));
+
+  return (
+    <div className="space-y-4">
+      {error && <Alert tone="danger">{error}</Alert>}
+      {notice && <Alert tone="success">{notice}</Alert>}
+
+      <Panel title="Was eine Spiegelung tut" bodyClassName="space-y-2 p-4 text-xs text-muted">
+        <p>
+          <strong className="text-ink">Hinaus (push):</strong> Nach jedem Push an dieses Repository
+          schiebt Forge alle Branches und Tags an die angegebene Adresse weiter. Nützlich, um eine
+          Kopie auf GitHub, GitLab oder Codeberg aktuell zu halten – etwa damit Werkzeuge, die nur
+          dort hinkommen, mit dem Quelltext arbeiten können.
+        </p>
+        <p>
+          <strong className="text-ink">Herein (pull):</strong> Forge holt alle fünf Minuten von der
+          angegebenen Adresse. Dieses Repository ist dann eine Kopie und sollte nicht direkt
+          beschrieben werden.
+        </p>
+        <p>
+          Je Richtung ist eine Spiegelung möglich, und beide Richtungen schließen sich gegenseitig
+          aus. Ein Token wird verschlüsselt gespeichert, nie wieder angezeigt und steht in keinem
+          Protokoll und keiner Kommandozeile.
+        </p>
+      </Panel>
+
+      <form onSubmit={save}>
+        <Panel title="Spiegelung einrichten" bodyClassName="space-y-4 p-4">
+          <Select
+            label="Richtung"
+            value={direction}
+            onChange={(event) => setDirection(event.target.value as 'push' | 'pull')}
+          >
+            <option value="push">Hinaus – Forge schiebt nach jedem Push weiter</option>
+            <option value="pull">Herein – Forge holt regelmäßig von dort</option>
+          </Select>
+
+          <Input
+            label="Adresse der Gegenseite"
+            type="url"
+            placeholder="https://github.com/benutzer/repository.git"
+            value={remoteUrl}
+            onChange={(event) => setRemoteUrl(event.target.value)}
+            hint="Nur https. Zugangsdaten gehören nicht in die Adresse, sondern in die beiden Felder darunter."
+            required
+          />
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Input
+              label="Benutzername"
+              placeholder="bei GitHub: dein Kontoname"
+              value={remoteUsername}
+              onChange={(event) => setRemoteUsername(event.target.value)}
+              autoComplete="off"
+            />
+            <Input
+              label="Token"
+              type="password"
+              placeholder="Personal Access Token"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              hint="Beim Bearbeiten leer lassen, um das vorhandene Token zu behalten."
+              autoComplete="new-password"
+            />
+          </div>
+
+          <Checkbox
+            checked={isExactCopy}
+            onChange={setIsExactCopy}
+            label="Exakte Kopie erzwingen"
+            hint={
+              direction === 'push'
+                ? 'Überschreibt auf der Gegenseite abweichende Branches und löscht dort Branches, die es hier nicht gibt (--mirror). Ohne diesen Haken werden nur Branches und Tags aktualisiert.'
+                : 'Verwirft hier lokale Abweichungen und übernimmt den Stand der Gegenseite vollständig.'
+            }
+          />
+
+          {existing.has(direction) && (
+            <Alert tone="warning">
+              Für diese Richtung ist schon eine Spiegelung eingerichtet. Speichern überschreibt sie.
+            </Alert>
+          )}
+
+          <div className="flex gap-2">
+            <Button type="submit" variant="primary" disabled={!remoteUrl.trim() || busy !== null}>
+              {busy === 'save' ? 'Wird gespeichert…' : 'Speichern'}
+            </Button>
+            <Button
+              type="button"
+              onClick={test}
+              disabled={!remoteUrl.trim() || busy !== null}
+              title="Prüft Adresse und Token, ohne etwas zu übertragen."
+            >
+              {busy === 'test' ? 'Wird geprüft…' : 'Verbindung prüfen'}
+            </Button>
+          </div>
+        </Panel>
+      </form>
+
+      <Panel title="Eingerichtete Spiegelungen" bodyClassName="divide-y divide-line">
+        {!items ? (
+          <Spin />
+        ) : items.length === 0 ? (
+          <EmptyState title="Keine Spiegelung eingerichtet" />
+        ) : (
+          items.map((entry) => (
+            <div key={entry.id} className="space-y-1.5 px-4 py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge tone={entry.direction === 'push' ? 'accent' : 'neutral'}>
+                  {entry.direction === 'push' ? 'hinaus' : 'herein'}
+                </Badge>
+                <code className="min-w-0 flex-1 truncate font-mono text-xs">{entry.remoteUrl}</code>
+                <Button size="sm" onClick={() => sync(entry.id)} disabled={busy !== null}>
+                  {busy === entry.id ? 'läuft…' : 'Jetzt übertragen'}
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => toggle(entry, !entry.isEnabled)}
+                  disabled={busy !== null}
+                >
+                  {entry.isEnabled ? 'Pausieren' : 'Fortsetzen'}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={async () => {
+                    await api.delete(`/api/v1/repos/${repoPath}/mirrors/${entry.id}`);
+                    setVersion((value) => value + 1);
+                  }}
+                >
+                  Löschen
+                </Button>
+              </div>
+
+              <p className="text-2xs text-faint">
+                <span className={MIRROR_STATUS[entry.status].tone}>
+                  {MIRROR_STATUS[entry.status].label}
+                </span>
+                {entry.lastSyncAt && <> · zuletzt {relativeTime(entry.lastSyncAt)}</>}
+                {!entry.isEnabled && <> · pausiert</>}
+                {entry.isExactCopy && <> · exakte Kopie</>}
+                {entry.remoteUsername && <> · als {entry.remoteUsername}</>}
+                <> · {entry.hasToken ? 'Token hinterlegt' : 'ohne Token'}</>
+              </p>
+
+              {entry.lastError && (
+                <p className="break-all text-2xs text-danger">{entry.lastError}</p>
+              )}
             </div>
           ))
         )}
