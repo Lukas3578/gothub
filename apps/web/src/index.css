@@ -1,0 +1,324 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Farbsystem.
+ *
+ * Die Werte stehen als RGB-Tripel ohne Funktionsaufruf, damit Tailwind sie mit
+ * Alpha-Modifikatoren (bg-surface/60) kombinieren kann.
+ *
+ * Das dunkle Theme ist die Ausgangslage: Neutraltöne mit leichtem Warmstich,
+ * dazu ein einziger Akzent. Kein Verlauf, keine Schatten – Tiefe entsteht
+ * ausschließlich über Flächenhelligkeit und Linien.
+ */
+
+:root,
+[data-theme='dark'] {
+  --canvas: 15 15 17;
+  --surface: 22 22 25;
+  --raised: 30 30 34;
+  --line: 44 44 49;
+  --line-strong: 62 62 68;
+  --ink: 232 232 234;
+  --muted: 150 150 158;
+  --faint: 104 104 113;
+  --accent: 226 138 54;
+  --accent-ink: 20 14 6;
+  --success: 86 171 110;
+  --danger: 215 90 85;
+  --warning: 212 160 64;
+  --info: 94 143 204;
+
+  --diff-add-bg: 24 48 33;
+  --diff-add-line: 38 74 51;
+  --diff-del-bg: 54 27 27;
+  --diff-del-line: 86 40 40;
+
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  /*
+   * Die Leinwand war mit 252/252/251 praktisch weiß. Flächen darauf hoben
+   * sich nur durch ihre Linie ab, und die Seite wirkte wie ein Stapel
+   * Rahmen ohne Vordergrund. Ein spürbarer Schritt zwischen Leinwand und
+   * Fläche stellt die Ebenen wieder her – ohne Schatten, wie vorgesehen.
+   */
+  --canvas: 246 245 243;
+  --surface: 255 255 255;
+  --raised: 243 242 240;
+  --line: 223 221 217;
+  --line-strong: 190 187 182;
+  --ink: 24 24 26;
+  --muted: 88 88 94;
+  --faint: 128 128 135;
+  /*
+   * Etwas tiefer als zuvor: Weiß auf dem alten Wert erreichte nur 4,4:1 und
+   * verfehlte damit die Schwelle für normalen Text auf Schaltflächen.
+   */
+  --accent: 166 85 14;
+  --accent-ink: 255 252 248;
+  --success: 32 114 60;
+  --danger: 176 42 42;
+  --warning: 150 106 20;
+  --info: 38 94 162;
+
+  --diff-add-bg: 230 247 234;
+  --diff-add-line: 196 232 205;
+  --diff-del-bg: 253 233 232;
+  --diff-del-line: 245 201 199;
+
+  color-scheme: light;
+}
+
+* {
+  border-color: rgb(var(--line));
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink font-sans antialiased;
+  font-size: 14px;
+  /* Tabellarische Ziffern: Zahlen in Listen und Diffs springen sonst. */
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sichtbarer, einheitlicher Fokusring für Tastaturbedienung. */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent));
+  outline-offset: 1px;
+}
+
+::selection {
+  background: rgb(var(--accent) / 0.3);
+}
+
+/* Schmale, unaufdringliche Scrollbalken. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: rgb(var(--canvas));
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--line-strong));
+  border: 2px solid rgb(var(--canvas));
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--faint));
+}
+
+@layer components {
+  /*
+   * Seitenbreite.
+   *
+   * Vorher standen 1400 px an sieben Stellen im Quelltext. Zwei Gründe für
+   * die Änderung: eine Zahl gehört an eine Stelle, und bei 1400 px lagen in
+   * der Dateiliste rund 700 px zwischen Dateinamen und zugehöriger
+   * Commit-Nachricht – zu weit, um beides als eine Zeile zu lesen.
+   */
+  .page {
+    @apply mx-auto w-full max-w-[1280px] px-4 sm:px-6;
+  }
+
+  /* Flächen mit Rahmen – das Grundelement der Oberfläche. */
+  .panel {
+    @apply border border-line bg-surface;
+  }
+
+  /*
+   * Überlagerungen: Menüs und Dialoge schweben über dem Inhalt. Tiefe
+   * entsteht hier über eine kräftigere Linie statt über einen Schatten –
+   * dieselbe Regel wie im restlichen System.
+   */
+  .overlay {
+    @apply border border-line-strong bg-surface;
+  }
+
+  .panel-header {
+    @apply flex items-center justify-between gap-3 border-b border-line bg-raised px-4 py-2.5;
+  }
+
+  /* Tabellen mit hoher Informationsdichte. */
+  .table-row {
+    @apply border-b border-line last:border-b-0 hover:bg-raised/60;
+  }
+
+  .label-chip {
+    @apply inline-flex items-center gap-1 border px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide;
+  }
+
+  .link {
+    @apply text-accent hover:underline underline-offset-2;
+  }
+
+  .code {
+    @apply font-mono text-[0.8125rem];
+  }
+}
+
+/* Diff-Darstellung */
+.diff-line-add {
+  background: rgb(var(--diff-add-bg));
+}
+.diff-line-del {
+  background: rgb(var(--diff-del-bg));
+}
+.diff-gutter-add {
+  background: rgb(var(--diff-add-line));
+}
+.diff-gutter-del {
+  background: rgb(var(--diff-del-line));
+}
+
+/* Syntaxhervorhebung – an das Farbsystem angepasst statt ein fremdes Theme. */
+.hljs {
+  color: rgb(var(--ink));
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: rgb(var(--faint));
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-type,
+.hljs-name,
+.hljs-strong {
+  color: rgb(var(--accent));
+}
+.hljs-string,
+.hljs-title,
+.hljs-attr,
+.hljs-attribute,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+  color: rgb(var(--success));
+}
+.hljs-number,
+.hljs-meta,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-link {
+  color: rgb(var(--info));
+}
+.hljs-deletion {
+  color: rgb(var(--danger));
+}
+
+/*
+ * Markdown-Darstellung für README und Kommentare.
+ *
+ * Fließtext ist etwas anderes als Oberfläche: 15 px statt 14 und eine
+ * großzügigere Zeilenhöhe, weil hier am Stück gelesen wird.
+ */
+.markdown {
+  @apply text-ink;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
+/*
+ * Zeilenlänge begrenzen.
+ *
+ * Über die volle Breite einer 1280-px-Spalte werden Zeilen rund 160 Zeichen
+ * lang; das Auge verliert beim Zeilensprung den Anschluss. Die Grenze gilt
+ * nur für Fließtext – Tabellen, Code und Bilder dürfen die volle Breite
+ * nutzen, weil sie nicht zeilenweise gelesen werden.
+ */
+.markdown > p,
+.markdown > ul,
+.markdown > ol,
+.markdown > blockquote {
+  max-width: 72ch;
+}
+
+.markdown > * + * {
+  margin-top: 1rem;
+}
+
+/*
+ * Nur die oberste Ebene bekommt eine Linie. Vorher trugen h1 und h2 je eine,
+ * wodurch eine README wie ein Stapel Trennlinien wirkte statt wie ein Text
+ * mit Gliederung. Rang entsteht hier über Größe, Gewicht und Abstand.
+ */
+.markdown h1 {
+  @apply border-b border-line pb-2 font-semibold tracking-tight;
+  font-size: 1.5rem;
+  line-height: 1.3;
+  margin-top: 2rem;
+}
+.markdown h2 {
+  @apply font-semibold tracking-tight;
+  font-size: 1.1875rem;
+  line-height: 1.35;
+  margin-top: 1.75rem;
+}
+.markdown h3 {
+  @apply font-semibold;
+  font-size: 1rem;
+  margin-top: 1.5rem;
+}
+.markdown h4 {
+  @apply text-sm font-semibold uppercase tracking-wide text-muted;
+  margin-top: 1.25rem;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown p {
+  @apply text-ink;
+}
+.markdown a {
+  @apply text-accent hover:underline underline-offset-2;
+}
+.markdown ul {
+  @apply list-disc pl-6 space-y-1;
+}
+.markdown ol {
+  @apply list-decimal pl-6 space-y-1;
+}
+.markdown code {
+  @apply font-mono text-[0.85em] bg-raised border border-line px-1 py-0.5;
+}
+.markdown pre {
+  @apply bg-raised border border-line p-3 overflow-x-auto;
+  /* Code wird nicht als Fließtext gelesen: normale Zeilenhöhe. */
+  line-height: 1.5;
+}
+.markdown pre code {
+  @apply bg-transparent border-0 p-0 text-[0.8125rem];
+}
+.markdown blockquote {
+  @apply border-l-2 border-line-strong pl-4 text-muted;
+}
+.markdown table {
+  @apply w-full border-collapse text-left;
+}
+.markdown th,
+.markdown td {
+  @apply border border-line px-3 py-1.5;
+}
+.markdown th {
+  @apply bg-raised font-semibold;
+}
+.markdown img {
+  @apply max-w-full;
+}
+.markdown hr {
+  @apply border-t border-line;
+}

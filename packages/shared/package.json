@@ -1,0 +1,23 @@
+{
+  "name": "@forge/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "//": "main/types zeigen auf das Build-Ergebnis, nicht auf die Quelle. Node kann keine .ts-Datei laden; zeigte main auf src/index.ts, scheiterte der Produktionsstart der API mit 'Unknown file extension .ts'. Vite und Vitest lösen das Paket über ihre eigenen Aliasse auf die Quelle auf und brauchen den Build nicht.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.3"
+  }
+}

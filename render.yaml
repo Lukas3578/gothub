@@ -1,0 +1,124 @@
+# Render-Konfiguration als Blueprint.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# WICHTIG ZUM VERSTÄNDNIS
+#
+# Diese Datei beschreibt die beiden bestehenden Dienste. Sie wirkt NUR, wenn
+# das Repository in Render ausdrücklich als Blueprint verbunden ist. Wurden
+# die Dienste – wie hier – von Hand angelegt, ignoriert Render diese Datei
+# vollständig: sie legt dann nichts an, ändert nichts und löscht nichts.
+#
+# Sie hat damit zwei Zwecke:
+#   1. Sie hält fest, welche Build- und Start-Befehle korrekt sind, damit sich
+#      die Einstellungen im Dashboard dagegen prüfen lassen.
+#   2. Wird sie später als Blueprint verbunden, treffen die Namen die
+#      bestehenden Dienste statt neue anzulegen.
+#
+# Ein `databases:`-Block fehlt bewusst. Er würde Render anweisen, eine
+# Datenbank zu verwalten – im schlechtesten Fall die bestehende zu ersetzen.
+# Die vorhandene Datenbank wird ausschließlich über DATABASE_URL referenziert.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ───────────────────────────────────────────────────────────────────────────
+  # API
+  # ───────────────────────────────────────────────────────────────────────────
+  - type: web
+    name: gothub
+    runtime: node
+    plan: starter
+    # npm ci installiert exakt die Versionen aus package-lock.json.
+    # --include=dev ist nötig, weil TypeScript zum Bauen gebraucht wird und
+    # Render bei NODE_ENV=production sonst nur Laufzeit-Abhängigkeiten holt.
+    buildCommand: npm ci --include=dev && npm run build:api
+    # Migrationen laufen hier, nicht bei jedem Request. Sie sind durch einen
+    # Advisory Lock gegen gleichzeitige Läufe abgesichert und brechen den
+    # Start ab, wenn sie fehlschlagen – lieber kein Start als halb migriert.
+    startCommand: npm run start:api
+    healthCheckPath: /health
+
+    # Dauerhafter Datenträger für die Git-Repositories.
+    #
+    # OHNE DIESEN BLOCK GEHEN ALLE REPOSITORIES BEI JEDEM DEPLOYMENT VERLOREN.
+    # Das Dateisystem eines Web Service ist flüchtig; die Datenbank überlebt,
+    # sodass die Oberfläche Repositories anzeigt, die es nicht mehr gibt.
+    #
+    # Ein Datenträger lässt sich nur im Dashboard anlegen (Settings → Disks)
+    # und setzt einen bezahlten Plan voraus. Ein Dienst mit Datenträger kann
+    # außerdem nicht auf mehrere Instanzen skalieren.
+    disk:
+      name: forge-data
+      mountPath: /var/data
+      sizeGB: 10
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Render gibt den Port vor; die API liest ihn aus PORT.
+      - key: PUBLIC_API_URL
+        value: https://gothub-q0p7.onrender.com
+      - key: PUBLIC_WEB_URL
+        value: https://forge-wuj4.onrender.com
+      # Diese Pfade müssen auf den Datenträger zeigen, sonst sind die Daten
+      # nach dem nächsten Deployment weg.
+      - key: GIT_STORAGE_ROOT
+        value: /var/data/repositories
+      - key: UPLOAD_STORAGE_ROOT
+        value: /var/data/uploads
+      # Render Web Services veröffentlichen genau einen HTTP-Port; ein
+      # SSH-Dienst wäre von außen nicht erreichbar.
+      - key: SSH_ENABLED
+        value: 'false'
+      # In der Entwicklung gehen E-Mails in das Protokoll. Für echten Versand
+      # MAIL_TRANSPORT=smtp setzen und die SMTP_*-Werte ergänzen.
+      - key: MAIL_TRANSPORT
+        value: console
+      # sync: false bedeutet: Wert wird im Dashboard gesetzt und nicht aus
+      # dieser Datei überschrieben. Geheimnisse gehören nicht ins Repository.
+      - key: DATABASE_URL
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: ENCRYPTION_KEY
+        sync: false
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Frontend
+  # ───────────────────────────────────────────────────────────────────────────
+  #
+  # Als Static Site. Läuft der Dienst stattdessen als Web Service, gelten
+  # stattdessen diese Werte:
+  #     Build Command: npm ci --include=dev && npm run build:web
+  #     Start Command: npm run start:web
+  # Das Startskript liefert apps/web/dist aus und leitet unbekannte Pfade auf
+  # index.html um – nötig für clientseitiges Routing.
+  - type: web
+    name: forge
+    runtime: static
+    buildCommand: npm ci --include=dev && npm run build:web
+    staticPublishPath: apps/web/dist
+
+    # Ohne diese Umschreibung liefert ein direkter Aufruf von /dashboard oder
+    # ein Reload einen 404: die Datei existiert nicht, die Route kennt nur der
+    # Client-Router.
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+    headers:
+      # Gebündelte Dateien tragen einen Hash im Namen und dürfen dauerhaft
+      # zwischengespeichert werden.
+      - path: /assets/*
+        name: Cache-Control
+        value: public, max-age=31536000, immutable
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+
+    envVars:
+      # Die API-Adresse steht in apps/web/.env.production und wird beim Bauen
+      # eingesetzt. Dieser Eintrag ist nur dann nötig, wenn eine andere
+      # Adresse gelten soll – er hat Vorrang vor der Datei.
+      - key: VITE_API_URL
+        value: https://gothub-q0p7.onrender.com

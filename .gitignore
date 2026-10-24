@@ -1,0 +1,21 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+.env.*.local
+data/
+*.log
+.DS_Store
+coverage/
+.vite/
+*.tsbuildinfo
+data-prod/
+apps/web/dist/
+apps/api/dist/
+packages/shared/dist/
+
+# Diese Datei gehoert ins Repository: sie enthaelt nur die oeffentliche
+# API-Adresse und steuert den Produktionsbuild. Ohne sie zeigt das Bundle
+# nicht auf die richtige API.
+!apps/web/.env.production
