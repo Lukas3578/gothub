@@ -68,10 +68,19 @@ export async function buildApp(): Promise<FastifyInstance> {
   });
 
   await app.register(cors, {
-    origin: config.server.publicWebUrl,
-    // Notwendig, damit das Session-Cookie vom Frontend mitgesendet wird.
+    /**
+     * Feste Liste erlaubter Origins. Kein Platzhalter und keine Ableitung aus
+     * dem Origin-Header der Anfrage: mit `credentials: true` wäre beides
+     * gleichbedeutend damit, jeder fremden Seite Zugriff auf angemeldete
+     * Sitzungen zu geben.
+     */
+    origin: config.server.allowedOrigins,
+    // Notwendig, damit Session- und CSRF-Cookie mitgesendet werden.
     credentials: true,
     allowedHeaders: ['content-type', config.security.csrfHeaderName, 'authorization'],
+    // Der Browser darf das Preflight-Ergebnis zwischenspeichern; ohne das
+    // bekäme jede schreibende Anfrage einen zusätzlichen Roundtrip.
+    maxAge: 86_400,
   });
 
   await app.register(cookie, {
@@ -178,6 +187,18 @@ export async function buildApp(): Promise<FastifyInstance> {
     allowRegistration: config.features.allowRegistration,
     maintenanceMode: config.features.maintenanceMode,
     gitHttpBase: `${config.server.publicApiUrl}/git`,
+    /**
+     * Die wirksamen Adressen. Hilft bei der Fehlersuche nach einem
+     * Deployment: stimmt `webUrl` nicht mit der Adresse im Browser überein,
+     * lehnt CORS die Anfragen des Frontends ab.
+     */
+    deployment: {
+      apiUrl: config.server.publicApiUrl,
+      webUrl: config.server.publicWebUrl,
+      crossSite: config.server.isCrossSite,
+      cookieSameSite: config.security.cookie.sameSite,
+      cookieSecure: config.security.cookie.secure,
+    },
   }));
 
   await registerAuthRoutes(app);

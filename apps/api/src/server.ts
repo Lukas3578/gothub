@@ -7,6 +7,7 @@ import { config } from './config.js';
 import { closeDatabase } from './db/index.js';
 import { closeMailTransport } from './services/mail.js';
 import { startSshServer } from './ssh-server.js';
+import { checkRepositoryStorage, logStorageReport } from './lib/storage-check.js';
 import { startScheduler } from './scheduler.js';
 
 async function main(): Promise<void> {
@@ -27,6 +28,17 @@ async function main(): Promise<void> {
   app.log.info(
     `${config.brand.name} API läuft auf ${config.server.publicApiUrl} (Git-Endpunkt: ${config.server.publicApiUrl}/git)`,
   );
+
+  app.log.info(
+    `Frontend erwartet unter ${config.server.publicWebUrl} ` +
+      `(Cookies: SameSite=${config.security.cookie.sameSite}, Secure=${config.security.cookie.secure})`,
+  );
+
+  // Prüft den Git-Speicher und meldet einen flüchtigen Datenträger deutlich.
+  // Läuft nach dem Start, damit ein Problem hier den Dienst nicht blockiert.
+  void checkRepositoryStorage()
+    .then((report) => logStorageReport(report, app.log))
+    .catch((error) => app.log.warn({ err: error }, 'Speicherprüfung fehlgeschlagen'));
 
   // Geordnetes Herunterfahren: laufende Anfragen werden noch beendet.
   const shutdown = async (signal: string) => {

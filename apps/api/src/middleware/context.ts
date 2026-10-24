@@ -17,6 +17,11 @@ declare module 'fastify' {
     sessionId: string | null;
     /** Wie sich der Benutzer ausgewiesen hat. */
     authMethod: 'session' | 'token' | null;
+    /**
+     * Der für diese Anfrage gültige CSRF-Token. Wird von
+     * GET /api/v1/auth/csrf an den Client ausgeliefert.
+     */
+    csrfToken: string | null;
   }
 
   interface FastifyInstance {
@@ -62,6 +67,7 @@ export const contextPlugin = fp(async (app: FastifyInstance) => {
   app.decorateRequest('viewer', null);
   app.decorateRequest('sessionId', null);
   app.decorateRequest('authMethod', null);
+  app.decorateRequest('csrfToken', null);
 
   app.addHook('onRequest', async (request: FastifyRequest) => {
     // 1. Bearer- oder Basic-Token (API-Clients, Git über HTTPS).
@@ -106,31 +112,77 @@ export const contextPlugin = fp(async (app: FastifyInstance) => {
 
   // -- CSRF-Schutz ----------------------------------------------------------
   //
-  // Double-Submit-Cookie: der Client liest den Wert aus einem nicht-HttpOnly
-  // Cookie und spiegelt ihn in einem Header. Ein fremder Ursprung kann den
-  // Cookie-Wert nicht lesen und den Header deshalb nicht korrekt setzen.
+  // Verfahren: Double Submit, aber der Client erhält den Token über den
+  // Antwortkörper von GET /api/v1/auth/csrf – nicht aus dem Cookie.
+  //
+  // Warum nicht aus dem Cookie: Frontend und API liegen auf verschiedenen
+  // Hosts. Ein Browser lässt `document.cookie` ausschließlich Cookies des
+  // eigenen Hosts lesen, niemals die eines anderen. Das Cookie der API ist
+  // für die Frontend-Seite also unsichtbar, der Header bliebe leer und jede
+  // schreibende Anfrage scheiterte mit 403.
+  //
+  // Warum das weiterhin schützt:
+  //  - Den Token kann nur eine Seite lesen, deren Origin in der CORS-Liste
+  //    steht. Eine fremde Seite erhält die Antwort vom Browser nicht.
+  //  - Einen eigenen Header kann eine fremde Seite nicht cross-origin setzen,
+  //    ohne einen Preflight auszulösen, den CORS für sie ablehnt.
+  //  - Das Cookie allein genügt nicht: es ist HttpOnly, also für Skripte
+  //    unlesbar, und der Vergleich verlangt beide Hälften.
+  //
+  // Zusätzlich wird die Origin geprüft. Das fängt Fehlkonfigurationen und
+  // Angriffe ab, bei denen ein Token auf anderem Weg bekannt würde.
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     if (SAFE_METHODS.has(request.method) || isCsrfExempt(request)) return;
 
+    // 1. Origin-Prüfung. Browser setzen Origin bei allen schreibenden
+    //    Anfragen; fehlt sie, stammt die Anfrage nicht aus einem Browser und
+    //    wird über den Token geprüft.
+    const origin = request.headers.origin;
+    if (typeof origin === 'string' && origin !== 'null') {
+      if (!config.server.allowedOrigins.includes(origin)) {
+        throw new ApiError(
+          'forbidden',
+          'Diese Anfrage kommt von einer nicht zugelassenen Adresse.',
+        );
+      }
+    }
+
+    // 2. Token-Vergleich in konstanter Zeit.
     const cookieValue = request.cookies[config.security.csrfCookieName];
     const headerValue = request.headers[config.security.csrfHeaderName];
 
     if (!cookieValue || typeof headerValue !== 'string' || !safeEqual(cookieValue, headerValue)) {
       throw new ApiError(
         'forbidden',
-        'CSRF-Prüfung fehlgeschlagen. Lade die Seite neu und versuche es erneut.',
+        'CSRF-Token fehlt oder ist abgelaufen. Lade die Seite neu und versuche es erneut.',
       );
     }
   });
 
-  /** Setzt das CSRF-Cookie, falls noch keines vorhanden ist. */
+  /**
+   * Stellt sicher, dass ein CSRF-Cookie existiert, und legt den Wert für die
+   * Antwort bereit.
+   *
+   * Das Cookie ist HttpOnly: gelesen wird es nur serverseitig. Der Client
+   * bekommt den Wert über `request.csrfToken`, den die Route
+   * /api/v1/auth/csrf im Antwortkörper ausgibt.
+   */
   app.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    if (request.cookies[config.security.csrfCookieName]) return;
-    reply.setCookie(config.security.csrfCookieName, generateToken(16), {
-      path: '/',
-      httpOnly: false, // muss für den Client lesbar sein – das ist der Zweck
-      sameSite: 'lax',
-      secure: config.isProduction,
+    const existing = request.cookies[config.security.csrfCookieName];
+
+    if (existing) {
+      request.csrfToken = existing;
+      return;
+    }
+
+    const token = generateToken(24);
+    request.csrfToken = token;
+
+    reply.setCookie(config.security.csrfCookieName, token, {
+      ...config.security.cookie,
+      // Nur der Server liest dieses Cookie. Es für Skripte lesbar zu machen
+      // hätte keinen Nutzen und wäre bei einer XSS-Lücke zusätzlicher Schaden.
+      httpOnly: true,
       maxAge: 60 * 60 * 24 * 7,
     });
   });

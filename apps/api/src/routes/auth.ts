@@ -41,11 +41,12 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
   /** Setzt das Session-Cookie. HttpOnly, damit JavaScript es nicht auslesen kann. */
   function setSessionCookie(reply: any, token: string, expiresAt: Date): void {
     reply.setCookie(config.security.sessionCookieName, token, {
-      path: '/',
+      // SameSite und Secure kommen aus einer Stelle, damit Session- und
+      // CSRF-Cookie nicht auseinanderlaufen. Bei getrennten Hosts ist
+      // SameSite=None nötig, sonst sendet der Browser das Cookie bei
+      // fetch-Aufrufen nicht mit und der Benutzer gilt als abgemeldet.
+      ...config.security.cookie,
       httpOnly: true,
-      // 'lax' erlaubt normale Navigation, blockiert aber Cross-Site-POSTs.
-      sameSite: 'lax',
-      secure: config.isProduction,
       signed: true,
       expires: expiresAt,
     });
@@ -133,9 +134,24 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  /**
+   * Liefert den CSRF-Token für diese Sitzung.
+   *
+   * Nötig, weil Frontend und API auf verschiedenen Hosts liegen können: dann
+   * ist das Cookie für die Frontend-Seite nicht lesbar. Lesen darf diese
+   * Antwort nur eine Origin, die in der CORS-Liste steht – damit bleibt der
+   * Token vor fremden Seiten geschützt.
+   */
+  app.get('/api/v1/auth/csrf', async (request) => {
+    return { csrfToken: request.csrfToken };
+  });
+
   app.get('/api/v1/auth/me', async (request) => {
-    if (!request.viewer) return { viewer: null };
-    return { viewer: toViewer(request.viewer) };
+    // Der Token wird mitgeliefert, damit der erste Seitenaufruf mit einer
+    // einzigen Anfrage auskommt.
+    const csrfToken = request.csrfToken;
+    if (!request.viewer) return { viewer: null, csrfToken };
+    return { viewer: toViewer(request.viewer), csrfToken };
   });
 
   // -- E-Mail-Verifizierung -------------------------------------------------

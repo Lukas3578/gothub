@@ -8,6 +8,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
+import {
+  ADDITIONAL_ALLOWED_ORIGINS,
+  DEFAULT_PUBLIC_API_URL,
+  DEFAULT_PUBLIC_WEB_URL,
+  isSameHost,
+} from './deployment.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '../../..');
@@ -49,10 +55,17 @@ const schema = z.object({
   FORGE_BRAND_NAME: z.string().min(1).default('Forge'),
   FORGE_BRAND_TAGLINE: z.string().default('Self-hosted developer platform'),
 
+  /**
+   * Viele Hosting-Anbieter – darunter Render – geben den Port über `PORT` vor
+   * und erwarten, dass der Dienst genau dort lauscht. Wird dort ein anderer
+   * Port belegt, gilt der Dienst als nicht erreichbar. `PORT` hat deshalb
+   * Vorrang vor `API_PORT`.
+   */
+  PORT: z.coerce.number().int().min(1).max(65535).optional(),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   API_HOST: z.string().default('0.0.0.0'),
-  PUBLIC_API_URL: z.string().url().default('http://localhost:4000'),
-  PUBLIC_WEB_URL: z.string().url().default('http://localhost:5173'),
+  PUBLIC_API_URL: z.string().url().optional(),
+  PUBLIC_WEB_URL: z.string().url().optional(),
 
   DATABASE_URL: z.string().min(1, 'DATABASE_URL ist erforderlich'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
@@ -82,6 +95,12 @@ const schema = z.object({
   SMTP_PASSWORD: z.string().optional(),
   MAIL_FROM: z.string().default('Forge <noreply@example.com>'),
 
+  /**
+   * SSH ist standardmäßig aus. Auf Plattformen, die je Dienst genau einen
+   * HTTP-Port veröffentlichen (Render, Heroku, Fly ohne eigene Portfreigabe),
+   * ist der Dienst von außen ohnehin nicht erreichbar; ein Start würde nur
+   * Fehler ins Protokoll schreiben.
+   */
   SSH_ENABLED: booleanish.default('false'),
   SSH_PORT: z.coerce.number().int().min(1).max(65535).default(2222),
   SSH_HOST: z.string().default('0.0.0.0'),
@@ -107,6 +126,29 @@ if (!parsed.success) {
 
 const env = parsed.data;
 
+// ---------------------------------------------------------------------------
+// Abgeleitete Adressen
+// ---------------------------------------------------------------------------
+
+const stripSlash = (value: string): string => value.replace(/\/$/, '');
+
+/**
+ * Die öffentlichen Adressen stammen aus der Umgebung, sonst aus
+ * deployment.ts. In der Entwicklung sind die localhost-Adressen gemeint,
+ * deshalb greifen die Produktions-Vorgaben nur außerhalb von `development`.
+ */
+const publicApiUrl = stripSlash(
+  env.PUBLIC_API_URL ??
+    (env.NODE_ENV === 'development' ? 'http://localhost:4000' : DEFAULT_PUBLIC_API_URL),
+);
+
+const publicWebUrl = stripSlash(
+  env.PUBLIC_WEB_URL ??
+    (env.NODE_ENV === 'development' ? 'http://localhost:5173' : DEFAULT_PUBLIC_WEB_URL),
+);
+
+const allowedOrigins = [...new Set([publicWebUrl, ...ADDITIONAL_ALLOWED_ORIGINS])];
+
 export const config = {
   env: env.NODE_ENV,
   isProduction: env.NODE_ENV === 'production',
@@ -118,10 +160,21 @@ export const config = {
   },
 
   server: {
-    port: env.API_PORT,
+    port: env.PORT ?? env.API_PORT,
     host: env.API_HOST,
-    publicApiUrl: env.PUBLIC_API_URL.replace(/\/$/, ''),
-    publicWebUrl: env.PUBLIC_WEB_URL.replace(/\/$/, ''),
+    publicApiUrl: publicApiUrl,
+    publicWebUrl: publicWebUrl,
+    /**
+     * Alle Origins, die auf die API zugreifen dürfen. Die Frontend-Adresse
+     * steht immer darin; die Zusatzliste erlaubt lokale Entwicklung.
+     */
+    allowedOrigins,
+    /**
+     * True, wenn Frontend und API auf verschiedenen Hosts liegen. In diesem
+     * Fall gelten Anfragen des Frontends als Cross-Site, und Cookies brauchen
+     * `SameSite=None; Secure` – siehe security.cookie.
+     */
+    isCrossSite: !isSameHost(publicApiUrl, publicWebUrl),
   },
 
   database: { url: env.DATABASE_URL },
@@ -135,6 +188,33 @@ export const config = {
     sessionCookieName: 'fg_session',
     csrfCookieName: 'fg_csrf',
     csrfHeaderName: 'x-forge-csrf',
+
+    /**
+     * Cookie-Eigenschaften, die für Session UND CSRF-Cookie gelten müssen.
+     *
+     * Liegen Frontend und API auf verschiedenen Hosts, sind die Anfragen des
+     * Frontends Cross-Site. Ein Cookie mit `SameSite=Lax` wird dann bei
+     * fetch-Aufrufen NICHT mitgesendet – der Benutzer wäre nach dem Login bei
+     * jeder weiteren Anfrage wieder abgemeldet. Dafür ist `SameSite=None`
+     * nötig, das der Browser nur zusammen mit `Secure` akzeptiert.
+     *
+     * Bei gleichem Host bleibt `Lax` die bessere Wahl: es schützt zusätzlich
+     * gegen CSRF und funktioniert auch über http in der Entwicklung.
+     *
+     * Dass Cookies cross-site mitgesendet werden, macht den CSRF-Schutz nicht
+     * überflüssig, sondern erst recht nötig – er steckt in middleware/context.ts.
+     */
+    cookie: (() => {
+      const crossSite = !isSameHost(publicApiUrl, publicWebUrl);
+      const production = env.NODE_ENV === 'production';
+      return {
+        sameSite: (crossSite && production ? 'none' : 'lax') as 'none' | 'lax',
+        // SameSite=None gilt im Browser nur mit Secure. Ohne https wäre das
+        // Cookie damit unbrauchbar, deshalb in der Entwicklung Lax + unsicher.
+        secure: production,
+        path: '/' as const,
+      };
+    })(),
   },
 
   git: {
