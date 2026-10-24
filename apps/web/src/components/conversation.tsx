@@ -19,7 +19,7 @@ import { api } from '../lib/api.js';
 import { useSession } from '../lib/session.js';
 import { Avatar } from './Shell.js';
 import { Button, Panel, Textarea, cx, relativeTime } from './ui.js';
-import { Markdown } from '../pages/repository.js';
+import { Markdown } from './Markdown.js';
 
 // ---------------------------------------------------------------------------
 // Zustandsanzeige
@@ -250,6 +250,39 @@ export function CommentEditor({
 // Verlauf
 // ---------------------------------------------------------------------------
 
+/**
+ * Ein Beitrag im Verlauf, mit der senkrechten Linie links.
+ *
+ * Ohne diese Linie stehen Eröffnungsbeitrag, Kommentare und Ereignisse als
+ * gleichwertige Kästen untereinander, und es ist nicht abzulesen, dass sie
+ * eine Abfolge bilden – besonders bei kurzen Ereigniszeilen zwischen langen
+ * Kommentaren.
+ *
+ * Auch der Eröffnungsbeitrag der Seite nutzt diese Hülle, sonst begänne die
+ * Linie erst beim zweiten Beitrag und die Spalten stünden versetzt.
+ *
+ * `last` verkürzt die Linie auf einen Stummel, damit sie nicht ins Leere
+ * unter den Verlauf zeigt – etwa in das Kommentarfeld hinein.
+ */
+export function TimelineItem({
+  children,
+  last,
+}: {
+  children: ReactNode;
+  last?: boolean;
+}) {
+  return (
+    <div
+      className={cx(
+        'relative pl-6 before:absolute before:left-[9px] before:top-0 before:w-px before:bg-line',
+        last ? 'before:h-6' : 'before:h-[calc(100%+0.75rem)]',
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function Timeline({
   entries,
   repoPath,
@@ -261,22 +294,26 @@ export function Timeline({
 }) {
   return (
     <div className="space-y-3">
-      {entries.map((entry) => {
-        if (entry.type === 'comment') {
-          return (
-            <CommentCard
-              key={entry.comment.id}
-              comment={entry.comment}
-              repoPath={repoPath}
-              onReload={onReload}
-            />
-          );
-        }
-        if (entry.type === 'review') {
-          return <ReviewCard key={entry.review.id} review={entry.review} />;
-        }
-        return <EventRow key={entry.event.id} event={entry.event} />;
-      })}
+      {entries.map((entry, index) => (
+        <TimelineItem
+          key={
+            entry.type === 'comment'
+              ? entry.comment.id
+              : entry.type === 'review'
+                ? entry.review.id
+                : entry.event.id
+          }
+          last={index === entries.length - 1}
+        >
+          {entry.type === 'comment' ? (
+            <CommentCard comment={entry.comment} repoPath={repoPath} onReload={onReload} />
+          ) : entry.type === 'review' ? (
+            <ReviewCard review={entry.review} />
+          ) : (
+            <EventRow event={entry.event} />
+          )}
+        </TimelineItem>
+      ))}
     </div>
   );
 }

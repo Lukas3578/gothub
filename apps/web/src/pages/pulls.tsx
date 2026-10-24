@@ -43,7 +43,8 @@ import {
   Timeline,
   UserList,
 } from '../components/conversation.js';
-import { DiffPanel, Markdown } from './repository.js';
+import { DiffPanel } from './repository.js';
+import { Markdown } from '../components/Markdown.js';
 import { IssueRow } from './issues.js';
 
 // ---------------------------------------------------------------------------

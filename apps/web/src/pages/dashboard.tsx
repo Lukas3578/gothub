@@ -60,7 +60,7 @@ export function DashboardPage() {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-[1400px] px-4 py-8">
+      <div className="page py-8">
         <ErrorBox error={error} />
       </div>
     );
@@ -68,7 +68,7 @@ export function DashboardPage() {
   if (!data) return <Spin />;
 
   return (
-    <div className="mx-auto max-w-[1400px] px-4 py-6">
+    <div className="page py-6">
       <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
         <div className="space-y-5">
           {!viewer?.emailVerified && (

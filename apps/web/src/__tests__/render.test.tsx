@@ -22,7 +22,8 @@ import { IssueDetailPage, IssueListPage, NewIssuePage } from '../pages/issues.js
 import { PullListPage } from '../pages/pulls.js';
 import { ActionsPage } from '../pages/actions.js';
 import { ReleasesPage, NotificationsPage, SearchPage } from '../pages/misc.js';
-import { Markdown } from '../pages/repository.js';
+import { Markdown } from '../components/Markdown.js';
+import { FileDeletePage, FileEditPage, FileUploadPage } from '../pages/file-edit.js';
 import {
   GistDetailPage,
   GistListPage,
@@ -89,6 +90,32 @@ const REPO: RepositoryDetail = {
  */
 const RESPONSES: [string, unknown][] = [
   ['/api/v1/auth/me', { viewer: VIEWER }],
+  [
+    '/blob/',
+    {
+      path: 'README.md',
+      content: '# Titel\n\nEin Absatz.\n',
+      size: 24,
+      isBinary: false,
+      tooLarge: false,
+      language: 'Markdown',
+      oid: 'a'.repeat(40),
+    },
+  ],
+  [
+    '/branches',
+    {
+      items: [
+        {
+          name: 'main',
+          oid: 'b'.repeat(40),
+          isDefault: true,
+          isProtected: false,
+          aheadBehind: null,
+        },
+      ],
+    },
+  ],
   ['/api/v1/notifications/count', { unreadCount: 2 }],
   [
     '/api/v1/notifications',
@@ -663,6 +690,48 @@ describe('Seiten rendern ohne Absturz', () => {
 
     await waitFor(() => expect(screen.getByLabelText('Suche')).toBeTruthy());
     await waitFor(() => expect(screen.getByText('2')).toBeTruthy());
+    expectNoReactErrors();
+  });
+
+  // -------------------------------------------------------------------------
+  // Dateien anlegen, bearbeiten, hochladen, löschen
+  // -------------------------------------------------------------------------
+
+  it('Datei anlegen zeigt Namensfeld, Editor und Commit-Leiste', async () => {
+    mount(<FileEditPage repo={REPO} mode="create" />, '/testerin/projekt/new');
+
+    expect(await screen.findByLabelText(/Dateiname/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Commit-Nachricht/i)).toBeTruthy();
+    // Beide Zielarten müssen angeboten werden, sonst ist ein geschützter
+    // Branch eine Sackgasse.
+    expect(screen.getByText(/Direkt auf/i)).toBeTruthy();
+    expect(screen.getByText(/Neuen Branch anlegen/i)).toBeTruthy();
+    expectNoReactErrors();
+  });
+
+  it('Datei bearbeiten lädt den vorhandenen Inhalt', async () => {
+    mount(<FileEditPage repo={REPO} mode="edit" />, '/testerin/projekt/edit/README.md');
+
+    expect(await screen.findByLabelText(/Commit-Nachricht/i)).toBeTruthy();
+    expectNoReactErrors();
+  });
+
+  it('Upload zeigt Ablagefläche und Zielverzeichnis', async () => {
+    mount(<FileUploadPage repo={REPO} />, '/testerin/projekt/upload');
+
+    expect(await screen.findByText(/Dateien hierher ziehen/i)).toBeTruthy();
+    expect(screen.getByLabelText(/Zielverzeichnis/i)).toBeTruthy();
+    // Ohne ausgewählte Datei darf nicht committet werden.
+    const button = screen.getByRole('button', { name: /committen/i }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expectNoReactErrors();
+  });
+
+  it('Löschen warnt und bietet trotzdem den Umweg über einen Branch', async () => {
+    mount(<FileDeletePage repo={REPO} />, '/testerin/projekt/delete/README.md');
+
+    expect(await screen.findByText(/Diese Datei wird gelöscht/i)).toBeTruthy();
+    expect(screen.getByText(/Neuen Branch anlegen/i)).toBeTruthy();
     expectNoReactErrors();
   });
 });

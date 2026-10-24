@@ -44,7 +44,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-full flex-col">
       <header className="sticky top-0 z-30 border-b border-line bg-surface/95 backdrop-blur">
-        <div className="mx-auto flex h-12 max-w-[1400px] items-center gap-4 px-4">
+        <div className="page flex h-12 items-center gap-4">
           <Link
             to={viewer ? '/dashboard' : '/'}
             className="flex shrink-0 items-center gap-2 font-semibold tracking-tight text-ink"
@@ -161,7 +161,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
       <main className="flex-1">{children}</main>
 
       <footer className="border-t border-line bg-surface">
-        <div className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-2 px-4 py-4 text-2xs text-faint">
+        <div className="page flex flex-wrap items-center gap-x-5 gap-y-2 py-4 text-2xs text-faint">
           <span className="font-medium text-muted">Forge 0.1.0</span>
           <Link to="/explore" className="hover:text-ink">
             Repositories
@@ -238,7 +238,20 @@ export function Avatar({
 
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
-  const hue = hash % 360;
+
+  /*
+   * Zwölf feste Stufen statt 360 freier Farbtöne, und deutlich blasser.
+   *
+   * Vorher: `hsl(hash % 360, 42%, 38%)`. Bei 42 % Sättigung und freiem
+   * Farbton stand neben dem warmen Akzent der Oberfläche regelmäßig ein
+   * kräftiges Indigo oder Magenta – zwei Farbwelten auf derselben Seite.
+   *
+   * Ein Avatar muss Namen unterscheidbar machen, nicht um Aufmerksamkeit
+   * werben. Bei 24 % Sättigung bleiben die Marken unterscheidbar, ordnen
+   * sich aber dem Akzent unter. Die feste Stufung verhindert außerdem, dass
+   * zwei Namen in fast derselben Farbe landen.
+   */
+  const hue = (hash % 12) * 30;
 
   return (
     <span
@@ -248,7 +261,7 @@ export function Avatar({
         width: size,
         height: size,
         fontSize: size * 0.5,
-        background: `hsl(${hue} 42% 38%)`,
+        background: `hsl(${hue} 24% 34%)`,
       }}
     >
       {name.charAt(0)}

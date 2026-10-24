@@ -3,7 +3,7 @@
  * Einstellungen.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Link,
   NavLink,
@@ -52,6 +52,21 @@ import { ActionsPage, RunDetailPage } from './actions.js';
 import { ReleasesPage } from './misc.js';
 import { ProjectBoardPage, ProjectListPage, WikiPage } from './extras.js';
 import { RepoSettingsLayout } from './repo-settings.js';
+import { Markdown } from '../components/Markdown.js';
+
+/**
+ * Der Editor bringt CodeMirror mit – rund 250 KB, die nur braucht, wer
+ * wirklich eine Datei bearbeitet. Deshalb erst beim Aufruf nachladen.
+ */
+const FileEditPage = lazy(() =>
+  import('./file-edit.js').then((m) => ({ default: m.FileEditPage })),
+);
+const FileUploadPage = lazy(() =>
+  import('./file-edit.js').then((m) => ({ default: m.FileUploadPage })),
+);
+const FileDeletePage = lazy(() =>
+  import('./file-edit.js').then((m) => ({ default: m.FileDeletePage })),
+);
 
 interface RepoContext {
   repo: RepositoryDetail;
@@ -109,11 +124,43 @@ export function RepositoryPage() {
   return (
     <div>
       <RepoHeader {...context} />
-      <div className="mx-auto max-w-[1400px] px-4 py-5">
+      <div className="page py-5">
         <Routes>
           <Route index element={<FileBrowser {...context} />} />
           <Route path="tree/*" element={<FileBrowser {...context} />} />
           <Route path="blob/*" element={<FileView {...context} />} />
+          <Route
+            path="new/*"
+            element={
+              <Suspense fallback={<Spin label="Editor wird geladen…" />}>
+                <FileEditPage repo={repo} mode="create" />
+              </Suspense>
+            }
+          />
+          <Route
+            path="edit/*"
+            element={
+              <Suspense fallback={<Spin label="Editor wird geladen…" />}>
+                <FileEditPage repo={repo} mode="edit" />
+              </Suspense>
+            }
+          />
+          <Route
+            path="upload/*"
+            element={
+              <Suspense fallback={<Spin />}>
+                <FileUploadPage repo={repo} />
+              </Suspense>
+            }
+          />
+          <Route
+            path="delete/*"
+            element={
+              <Suspense fallback={<Spin />}>
+                <FileDeletePage repo={repo} />
+              </Suspense>
+            }
+          />
           <Route path="commits" element={<CommitList {...context} />} />
           <Route path="commit/:oid" element={<CommitView {...context} />} />
           <Route path="branches" element={<BranchList {...context} />} />
@@ -176,7 +223,7 @@ function RepoHeader({ repo, reload }: RepoContext) {
 
   return (
     <div className="border-b border-line bg-surface">
-      <div className="mx-auto max-w-[1400px] px-4 pt-4">
+      <div className="page pt-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="flex flex-wrap items-center gap-2 text-lg">
@@ -402,6 +449,82 @@ export function RefPicker({ repo, value, onChange }: { repo: RepositoryDetail; v
   );
 }
 
+/**
+ * Einstieg zum Anlegen und Hochladen von Dateien.
+ *
+ * Als Menü statt zweier Schaltflächen, weil die Leiste darüber auf dem
+ * Telefon sonst umbricht und der Dateibrowser nach unten rutscht.
+ */
+function AddFileMenu({
+  base,
+  path,
+  refQuery,
+}: {
+  base: string;
+  path: string;
+  refQuery: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const container = useRef<HTMLDivElement | null>(null);
+
+  // Klick daneben und Escape schließen das Menü – ohne beides bliebe es
+  // offen stehen, sobald man woandershin klickt.
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointer = (event: PointerEvent) => {
+      if (!container.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const suffix = path ? `/${path}` : '';
+
+  return (
+    <div ref={container} className="relative">
+      <Button size="sm" onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="menu">
+        Datei hinzufügen
+        <span aria-hidden="true" className="text-faint">
+          ▾
+        </span>
+      </Button>
+
+      {open && (
+        <div
+          role="menu"
+          className="overlay absolute right-0 z-20 mt-1 w-56"
+        >
+          <Link
+            role="menuitem"
+            to={`${base}/new${suffix}${refQuery}`}
+            onClick={() => setOpen(false)}
+            className="block px-3 py-2 text-xs hover:bg-raised"
+          >
+            Neue Datei anlegen
+          </Link>
+          <Link
+            role="menuitem"
+            to={`${base}/upload${suffix}${refQuery}`}
+            onClick={() => setOpen(false)}
+            className="block border-t border-line px-3 py-2 text-xs hover:bg-raised"
+          >
+            Dateien hochladen
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CloneBox({ repo }: { repo: RepositoryDetail }) {
   const [copied, setCopied] = useState(false);
 
@@ -500,7 +623,10 @@ function FileBrowser({ repo, reload }: RepoContext) {
         <div className="flex flex-wrap items-center gap-3">
           <RefPicker repo={repo} value={ref} onChange={setRef} />
           <Breadcrumbs base={base} path={path} refQuery={refQuery} repoName={repo.name} />
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            {hasAccess(repo.viewerAccess, 'write') && (
+              <AddFileMenu base={base} path={path} refQuery={refQuery} />
+            )}
             <CloneBox repo={repo} />
           </div>
         </div>
@@ -601,7 +727,13 @@ function LanguageBar({ repo }: { repo: RepositoryDetail }) {
 
   return (
     <Panel title="Sprachen" bodyClassName="p-4">
-      <div className="flex h-2 w-full overflow-hidden">
+      {/*
+        Die Sprachfarben stammen aus der verbreiteten Konvention (JavaScript
+        gelb, Go türkis). Manche davon sind auf weißem Grund fast unsichtbar,
+        deshalb bekommt der Balken eine Linie – die Farbe bleibt erkennbar,
+        die Form auch.
+      */}
+      <div className="flex h-2 w-full overflow-hidden border border-line">
         {entries.map(([language, bytes]) => (
           <span
             key={language}
@@ -614,7 +746,10 @@ function LanguageBar({ repo }: { repo: RepositoryDetail }) {
         {entries.slice(0, 6).map(([language, bytes]) => (
           <li key={language} className="flex items-center justify-between">
             <span className="flex items-center gap-1.5">
-              <span className="h-2 w-2" style={{ background: languageColor(language) }} />
+              <span
+                className="h-2 w-2 border border-line"
+                style={{ background: languageColor(language) }}
+              />
               {language}
             </span>
             <span className="text-faint">{((bytes / total) * 100).toFixed(1)} %</span>
@@ -783,12 +918,32 @@ function FileView({ repo }: RepoContext) {
           </span>
         }
         actions={
-          <a
-            href={`${BASE_URL}/api/v1/repos/${repo.ownerName}/${repo.name}/raw/${path}?ref=${encodeURIComponent(ref)}`}
-            className="text-2xs text-muted hover:text-ink"
-          >
-            Rohdatei
-          </a>
+          <div className="flex items-center gap-3">
+            {hasAccess(repo.viewerAccess, 'write') && !blob.tooLarge && (
+              <>
+                {!blob.isBinary && (
+                  <Link
+                    to={`${base}/edit/${path}${refQuery}`}
+                    className="text-2xs text-muted hover:text-ink"
+                  >
+                    Bearbeiten
+                  </Link>
+                )}
+                <Link
+                  to={`${base}/delete/${path}${refQuery}`}
+                  className="text-2xs text-muted hover:text-danger"
+                >
+                  Löschen
+                </Link>
+              </>
+            )}
+            <a
+              href={`${BASE_URL}/api/v1/repos/${repo.ownerName}/${repo.name}/raw/${path}?ref=${encodeURIComponent(ref)}`}
+              className="text-2xs text-muted hover:text-ink"
+            >
+              Rohdatei
+            </a>
+          </div>
         }
         bodyClassName="overflow-x-auto"
       >
@@ -836,81 +991,6 @@ function FileView({ repo }: RepoContext) {
       </Panel>
     </div>
   );
-}
-
-/**
- * Markdown-Darstellung.
- *
- * `marked` erzeugt HTML, das hier eingefügt wird. Damit eingebettetes
- * <script> oder ein onerror-Attribut aus einer README nicht ausgeführt wird,
- * läuft das Ergebnis vorher durch eine Bereinigung über den DOM-Parser.
- */
-export function Markdown({ source }: { source: string }) {
-  const html = useMemo(() => {
-    const raw = marked.parse(source, { async: false, gfm: true, breaks: false }) as string;
-    return sanitizeHtml(raw);
-  }, [source]);
-
-  return <div className="markdown" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-const ALLOWED_TAGS = new Set([
-  'A','ABBR','B','BLOCKQUOTE','BR','CODE','DD','DEL','DETAILS','DIV','DL','DT','EM','H1','H2',
-  'H3','H4','H5','H6','HR','I','IMG','INPUT','KBD','LI','OL','P','PRE','S','SPAN','STRONG',
-  'SUB','SUMMARY','SUP','TABLE','TBODY','TD','TH','THEAD','TR','UL',
-]);
-
-const ALLOWED_ATTRS = new Set(['href', 'src', 'alt', 'title', 'align', 'colspan', 'rowspan']);
-
-function sanitizeHtml(html: string): string {
-  const template = document.createElement('template');
-  template.innerHTML = html;
-
-  const walk = (node: Element) => {
-    for (const child of Array.from(node.children)) {
-      if (!ALLOWED_TAGS.has(child.tagName)) {
-        child.remove();
-        continue;
-      }
-
-      for (const attr of Array.from(child.attributes)) {
-        const name = attr.name.toLowerCase();
-
-        // Alle Event-Handler und nicht freigegebenen Attribute entfernen.
-        if (!ALLOWED_ATTRS.has(name)) {
-          child.removeAttribute(attr.name);
-          continue;
-        }
-
-        // Nur unbedenkliche Protokolle zulassen: javascript: und data: in
-        // href oder src wären eine direkte Skriptausführung.
-        if (name === 'href' || name === 'src') {
-          const value = attr.value.trim().toLowerCase();
-          if (
-            value.startsWith('javascript:') ||
-            value.startsWith('vbscript:') ||
-            (value.startsWith('data:') && !value.startsWith('data:image/'))
-          ) {
-            child.removeAttribute(attr.name);
-          }
-        }
-      }
-
-      if (child.tagName === 'A') {
-        child.setAttribute('rel', 'noreferrer noopener nofollow');
-        child.setAttribute('target', '_blank');
-      }
-      if (child.tagName === 'INPUT') {
-        // Aufgabenlisten aus Markdown bleiben erhalten, aber nicht bedienbar.
-        child.setAttribute('disabled', 'true');
-      }
-
-      walk(child);
-    }
-  };
-
-  walk(template.content as unknown as Element);
-  return template.innerHTML;
 }
 
 // ---------------------------------------------------------------------------

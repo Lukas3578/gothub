@@ -26,7 +26,7 @@ import {
   relativeTime,
 } from '../components/ui.js';
 import { Avatar } from '../components/Shell.js';
-import { Markdown } from './repository.js';
+import { Markdown } from '../components/Markdown.js';
 
 // ===========================================================================
 // Wiki

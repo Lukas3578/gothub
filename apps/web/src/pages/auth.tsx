@@ -19,7 +19,7 @@ export function LandingPage() {
   const gitBase = `${BASE_URL}/git`;
 
   return (
-    <div className="mx-auto max-w-[1400px] px-4">
+    <div className="page">
       <section className="border-b border-line py-20">
         <div className="max-w-3xl">
           <p className="mb-5 inline-flex items-center gap-2 border border-line px-2.5 py-1 text-2xs uppercase tracking-widest text-muted">

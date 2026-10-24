@@ -37,9 +37,10 @@ import {
   SidebarSection,
   StateBadge,
   Timeline,
+  TimelineItem,
   UserList,
 } from '../components/conversation.js';
-import { Markdown } from './repository.js';
+import { Markdown } from '../components/Markdown.js';
 
 interface IssueListResponse {
   items: IssueSummary[];
@@ -418,33 +419,35 @@ export function IssueDetailPage({ repo }: { repo: RepositoryDetail }) {
 
       <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
         <div className="space-y-3">
-          <article className="panel">
-            <header className="panel-header">
-              <div className="flex items-center gap-2 text-xs">
-                <Avatar name={issue.author?.username ?? '?'} size={20} url={issue.author?.avatarUrl} />
-                {issue.author && (
-                  <Link to={`/${issue.author.username}`} className="font-semibold hover:text-accent">
-                    {issue.author.username}
-                  </Link>
+          <TimelineItem last={data.timeline.length === 0}>
+            <article className="panel">
+              <header className="panel-header">
+                <div className="flex items-center gap-2 text-xs">
+                  <Avatar name={issue.author?.username ?? '?'} size={20} url={issue.author?.avatarUrl} />
+                  {issue.author && (
+                    <Link to={`/${issue.author.username}`} className="font-semibold hover:text-accent">
+                      {issue.author.username}
+                    </Link>
+                  )}
+                  <span className="text-faint">eröffnete {relativeTime(issue.createdAt)}</span>
+                </div>
+              </header>
+              <div className="p-4">
+                {issue.body ? (
+                  <Markdown source={issue.body} />
+                ) : (
+                  <p className="text-sm italic text-faint">Keine Beschreibung angegeben.</p>
                 )}
-                <span className="text-faint">eröffnete {relativeTime(issue.createdAt)}</span>
               </div>
-            </header>
-            <div className="p-4">
-              {issue.body ? (
-                <Markdown source={issue.body} />
-              ) : (
-                <p className="text-sm italic text-faint">Keine Beschreibung angegeben.</p>
-              )}
-            </div>
-            <footer className="border-t border-line px-4 py-2">
-              <Reactions
-                reactions={issue.reactions}
-                onToggle={toggleReaction}
-                disabled={!viewer}
-              />
-            </footer>
-          </article>
+              <footer className="border-t border-line px-4 py-2">
+                <Reactions
+                  reactions={issue.reactions}
+                  onToggle={toggleReaction}
+                  disabled={!viewer}
+                />
+              </footer>
+            </article>
+          </TimelineItem>
 
           <Timeline entries={data.timeline} repoPath={repoPath} onReload={reload} />
 
