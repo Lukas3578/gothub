@@ -9,7 +9,7 @@
 
 import type { ApiErrorBody, ApiErrorCode } from '@forge/shared';
 
-const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:4000';
+const BASE_URL = 'https://gothub-q0p7.onrender.com';
 const CSRF_COOKIE = 'fg_csrf';
 const CSRF_HEADER = 'x-forge-csrf';
 
