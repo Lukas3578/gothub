@@ -1008,43 +1008,85 @@ export async function blameFile(
 // Schreibende Operationen ohne Arbeitsverzeichnis
 // ---------------------------------------------------------------------------
 
+/** Eine einzelne Änderung innerhalb eines Commits. */
+export interface FileChange {
+  /** Pfad im Repository. */
+  path: string;
+  /** Null löscht die Datei. */
+  content: Buffer | null;
+  /** Zielpfad bei Umbenennung. */
+  newPath?: string;
+  /** Ausführbares Bit; voreingestellt ist 100644. */
+  executable?: boolean;
+}
+
 /**
- * Erstellt einen Commit, der eine einzelne Datei setzt oder löscht.
+ * Erstellt einen Commit, der mehrere Dateien setzt, umbenennt oder löscht.
  *
  * Arbeitet ausschließlich über die Plumbing-Kommandos hash-object, read-tree,
  * update-index, write-tree und commit-tree. Es wird kein Arbeitsverzeichnis
  * angelegt – das wäre bei gleichzeitigen Bearbeitungen desselben Repositories
  * eine Fehlerquelle und würde Festplattenplatz kosten.
+ *
+ * Alle Änderungen landen in **einem** Commit. Das ist nicht nur hübscher,
+ * sondern der Grund, warum es diese Funktion gibt: Beim Hochladen von zwanzig
+ * Dateien wären zwanzig Commits sowohl in der Historie als auch für Hooks und
+ * Spiegelungen Unsinn.
  */
-export async function commitFileChange(
+export async function commitFileChanges(
   repositoryId: string,
   options: {
+    /** Branch, auf den der Commit zeigt. */
     branch: string;
-    path: string;
-    /** Null löscht die Datei. */
-    content: Buffer | null;
+    /**
+     * Ausgangsbranch, falls `branch` noch nicht existiert. Damit entsteht ein
+     * neuer Branch aus dem aktuellen Stand – der Weg, um an einem geschützten
+     * Branch vorbei einen Pull Request vorzubereiten.
+     */
+    startBranch?: string;
+    changes: FileChange[];
     message: string;
     author: { name: string; email: string };
     /** Erwarteter aktueller Branch-Stand; verhindert verlorene Änderungen. */
     expectedOid?: string | null;
-    /** Zielpfad bei Umbenennung. */
-    newPath?: string;
   },
 ): Promise<string> {
   const cwd = repositoryPath(repositoryId);
   const branch = assertNotOption(options.branch, 'Branch-Name');
-  const path = normalizePath(options.path);
 
-  const parentOid = await resolveRef(repositoryId, branch);
+  if (options.changes.length === 0) {
+    throw new GitError('Es wurde keine Änderung übergeben.', 1, '');
+  }
+
+  // Der Stand, auf dem der Commit aufsetzt. Bei einem neuen Branch ist das
+  // der Ausgangsbranch; der neue Branch selbst hat noch keinen.
+  const branchOid = await resolveRef(repositoryId, branch);
+  const parentOid =
+    branchOid ??
+    (options.startBranch
+      ? await resolveRef(repositoryId, assertNotOption(options.startBranch, 'Ausgangsbranch'))
+      : null);
 
   if (options.expectedOid !== undefined && options.expectedOid !== null) {
-    if (parentOid !== options.expectedOid) {
+    if (branchOid !== options.expectedOid) {
       throw new GitError(
         'Der Branch wurde zwischenzeitlich geändert. Lade die Seite neu und wiederhole die Änderung.',
         1,
         '',
       );
     }
+  }
+
+  // Doppelte Zielpfade würden sich gegenseitig überschreiben, und zwar
+  // abhängig von der Reihenfolge. Lieber eine klare Meldung.
+  const targets = new Set<string>();
+  for (const change of options.changes) {
+    const target = normalizePath(change.newPath ?? change.path);
+    if (!target) throw new GitError('Ein Pfad darf nicht leer sein.', 1, '');
+    if (targets.has(target)) {
+      throw new GitError(`Der Pfad "${target}" kommt mehrfach vor.`, 1, '');
+    }
+    targets.add(target);
   }
 
   // Ein temporärer Index pro Operation, damit parallele Änderungen am selben
@@ -1059,25 +1101,30 @@ export async function commitFileChange(
       await runGit(['read-tree', '--empty'], { cwd, env });
     }
 
-    if (options.content === null) {
-      await removeFromIndex(cwd, env, path);
-    } else {
+    for (const change of options.changes) {
+      const path = normalizePath(change.path);
+
+      if (change.content === null) {
+        await removeFromIndex(cwd, env, path);
+        continue;
+      }
+
       const hashResult = await runGit(['hash-object', '-w', '--stdin'], {
         cwd,
-        input: options.content,
+        input: change.content,
       });
       const blobOid = hashResult.stdout.toString('utf8').trim();
 
-      const targetPath = options.newPath ? normalizePath(options.newPath) : path;
-
-      if (options.newPath && targetPath !== path) {
+      const targetPath = change.newPath ? normalizePath(change.newPath) : path;
+      if (change.newPath && targetPath !== path) {
         await removeFromIndex(cwd, env, path);
       }
 
-      await runGit(
-        ['update-index', '--add', '--cacheinfo', `100644,${blobOid},${targetPath}`],
-        { cwd, env },
-      );
+      const mode = change.executable ? '100755' : '100644';
+      await runGit(['update-index', '--add', '--cacheinfo', `${mode},${blobOid},${targetPath}`], {
+        cwd,
+        env,
+      });
     }
 
     const treeOid = (await runGitText(['write-tree'], { cwd, env })).trim();
@@ -1100,10 +1147,11 @@ export async function commitFileChange(
 
     // update-ref mit altem Wert: schlägt fehl, wenn jemand anderes den Branch
     // zwischenzeitlich verschoben hat. Das ist die eigentliche Absicherung
-    // gegen verlorene Änderungen, nicht die Prüfung weiter oben.
+    // gegen verlorene Änderungen, nicht die Prüfung weiter oben. Der leere
+    // alte Wert verlangt, dass der Branch noch nicht existiert – damit kann
+    // ein neuer Branch keinen bestehenden überschreiben.
     const updateArgs = ['update-ref', `refs/heads/${branch}`, commitOid];
-    if (parentOid) updateArgs.push(parentOid);
-    else updateArgs.push('');
+    updateArgs.push(branchOid ?? '');
 
     await runGit(updateArgs, { cwd });
 
@@ -1112,6 +1160,36 @@ export async function commitFileChange(
     const { unlink } = await import('node:fs/promises');
     await unlink(indexFile).catch(() => {});
   }
+}
+
+/**
+ * Commit mit genau einer Änderung. Dünne Hülle um `commitFileChanges`, damit
+ * es nur eine Implementierung des eigentlichen Ablaufs gibt.
+ */
+export async function commitFileChange(
+  repositoryId: string,
+  options: {
+    branch: string;
+    startBranch?: string;
+    path: string;
+    content: Buffer | null;
+    message: string;
+    author: { name: string; email: string };
+    expectedOid?: string | null;
+    newPath?: string;
+  },
+): Promise<string> {
+  const change: FileChange = { path: options.path, content: options.content };
+  if (options.newPath !== undefined) change.newPath = options.newPath;
+
+  return commitFileChanges(repositoryId, {
+    branch: options.branch,
+    ...(options.startBranch !== undefined ? { startBranch: options.startBranch } : {}),
+    changes: [change],
+    message: options.message,
+    author: options.author,
+    ...(options.expectedOid !== undefined ? { expectedOid: options.expectedOid } : {}),
+  });
 }
 
 /**

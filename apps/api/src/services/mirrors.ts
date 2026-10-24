@@ -346,7 +346,7 @@ export async function runMirror(mirrorId: string): Promise<{ ok: boolean; error?
 
     if (mirror.direction === 'pull') {
       // Nach einem Pull haben sich Inhalt und Sprachen geändert.
-      await syncRepositoryMetadata(mirror.repositoryId).catch(() => {});
+      await syncRepositoryMetadata(mirror.repositoryId, { touchPushedAt: true }).catch(() => {});
     }
 
     await db

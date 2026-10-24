@@ -12,6 +12,7 @@
  *  4. Jeder Prozess hat ein Zeitlimit und eine Ausgabegrenze.
  */
 
+import { existsSync } from 'node:fs';
 import { spawn, type SpawnOptions } from 'node:child_process';
 import { config } from '../config.js';
 
@@ -100,6 +101,31 @@ function buildEnvironment(extra?: Record<string, string>): NodeJS.ProcessEnv {
 }
 
 /**
+ * Übersetzt einen fehlgeschlagenen Prozessstart in eine brauchbare Meldung.
+ *
+ * `spawn git ENOENT` bedeutet zweierlei: entweder fehlt Git selbst, oder das
+ * Arbeitsverzeichnis existiert nicht. Letzteres ist der häufigere Fall und
+ * hat eine bekannte Ursache – ein flüchtiges Dateisystem, auf dem die
+ * Datenbankzeilen das Deployment überleben, die Repository-Daten aber nicht.
+ * Die rohe Node-Meldung schickt den Betreiber dann auf die falsche Fährte.
+ */
+function startFailureMessage(error: NodeJS.ErrnoException, cwd?: string): string {
+  if (error.code === 'ENOENT' && cwd && !existsSync(cwd)) {
+    return (
+      'Die Daten dieses Repositories fehlen im Speicher. ' +
+      'Die Datenbank kennt es, das Verzeichnis existiert aber nicht. ' +
+      'Typische Ursache: ein flüchtiges Dateisystem ohne dauerhaften Datenträger.'
+    );
+  }
+
+  if (error.code === 'ENOENT') {
+    return 'Git ist auf diesem Server nicht installiert oder nicht über PATH erreichbar.';
+  }
+
+  return `Git konnte nicht gestartet werden: ${error.message}`;
+}
+
+/**
  * Führt ein Git-Kommando aus und sammelt die Ausgabe.
  *
  * Für große Ausgaben (Packfiles) nicht geeignet – dafür `streamGit` verwenden.
@@ -153,7 +179,7 @@ export function runGit(args: string[], options: GitRunOptions = {}): Promise<Git
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      rejectPromise(new GitError(`Git konnte nicht gestartet werden: ${error.message}`, -1, stderr));
+      rejectPromise(new GitError(startFailureMessage(error, options.cwd), -1, stderr));
     });
 
     child.on('close', (code) => {

@@ -12,7 +12,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { TreeEntry } from '@forge/shared';
 import { db } from '../db/index.js';
 import { branchProtections, namespaces, users } from '../db/schema.js';
-import { notFound, validationFailed } from '../lib/errors.js';
+import { notFound, payloadTooLarge, validationFailed } from '../lib/errors.js';
 import { requireRepositoryAccess } from '../services/permissions.js';
 import { syncRepositoryMetadata } from '../services/repository-metadata.js';
 import {
@@ -20,6 +20,7 @@ import {
   blameFile,
   checkMergeable,
   commitFileChange,
+  commitFileChanges,
   commitsBetween,
   countCommits,
   createBranch,
@@ -463,8 +464,43 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
   );
 
   // -- Datei anlegen, ändern, löschen --------------------------------------
+
+  /**
+   * Obergrenze je Commit über diese Route.
+   *
+   * Der Rahmen steckt in `bodyLimit` der Anwendung (10 MB). Base64 bläht die
+   * Nutzdaten um ein Drittel auf, deshalb liegt die Grenze für den reinen
+   * Inhalt darunter. Wer größere Dateien unterbringen will, nimmt `git push`
+   * – dafür ist der Weg über den Browser nicht gedacht.
+   */
+  const MAX_COMMIT_BYTES = 6 * 1024 * 1024;
+
+  /**
+   * Prüft, ob auf diesen Branch direkt geschrieben werden darf.
+   * Ein geschützter Branch verlangt einen Pull Request.
+   */
+  async function assertBranchWritable(repositoryId: string, branch: string): Promise<void> {
+    const protections = await db
+      .select()
+      .from(branchProtections)
+      .where(eq(branchProtections.repositoryId, repositoryId));
+
+    const protection = protections.find((p) => matchesPattern(branch, p.pattern));
+    if (protection?.requirePullRequest) {
+      throw validationFailed(
+        `Der Branch "${branch}" ist geschützt. Änderungen müssen über einen Pull Request erfolgen.`,
+      );
+    }
+  }
+
   const fileWriteSchema = z.object({
     branch: z.string().min(1).max(255),
+    /**
+     * Existiert `branch` noch nicht, wird er aus diesem Branch erzeugt. So
+     * lässt sich eine Änderung auf einem neuen Branch ablegen, ohne ihn
+     * vorher anzulegen.
+     */
+    startBranch: z.string().min(1).max(255).optional(),
     message: z.string().min(1).max(2000),
     /** Base64, damit auch Binärinhalte übertragen werden können. */
     contentBase64: z.string().nullable(),
@@ -472,6 +508,78 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
     /** Stand, auf dem die Änderung basiert. Verhindert stilles Überschreiben. */
     expectedOid: z.string().length(40).nullish(),
   });
+
+  /**
+   * Mehrere Dateien in einem Commit.
+   *
+   * Gedacht für den Upload mehrerer Dateien: zwanzig Dateien sollen zu einem
+   * Commit führen, nicht zu zwanzig.
+   */
+  const batchWriteSchema = z.object({
+    branch: z.string().min(1).max(255),
+    startBranch: z.string().min(1).max(255).optional(),
+    message: z.string().min(1).max(2000),
+    expectedOid: z.string().length(40).nullish(),
+    changes: z
+      .array(
+        z.object({
+          path: z.string().min(1).max(1000),
+          contentBase64: z.string().nullable(),
+          newPath: z.string().max(1000).optional(),
+        }),
+      )
+      .min(1)
+      .max(100),
+  });
+
+  app.post<{ Params: { owner: string; repo: string } }>(
+    '/api/v1/repos/:owner/:repo/contents',
+    async (request) => {
+      app.requireAuth(request);
+      const input = batchWriteSchema.parse(request.body);
+
+      const access = await requireRepositoryAccess(
+        request.params.owner,
+        request.params.repo,
+        request.viewer,
+        'write',
+      );
+
+      await assertBranchWritable(access.repository.id, input.branch);
+
+      const changes = input.changes.map((change) => ({
+        path: change.path,
+        content: change.contentBase64 === null ? null : Buffer.from(change.contentBase64, 'base64'),
+        ...(change.newPath !== undefined ? { newPath: change.newPath } : {}),
+      }));
+
+      const total = changes.reduce((sum, change) => sum + (change.content?.length ?? 0), 0);
+      if (total > MAX_COMMIT_BYTES) {
+        throw payloadTooLarge(
+          `Zusammen ${formatSize(total)} – erlaubt sind ${formatSize(MAX_COMMIT_BYTES)} je Commit. ` +
+            'Größere Dateien gehören über `git push` ins Repository.',
+        );
+      }
+
+      try {
+        const oid = await commitFileChanges(access.repository.id, {
+          branch: input.branch,
+          ...(input.startBranch !== undefined ? { startBranch: input.startBranch } : {}),
+          changes,
+          message: input.message,
+          author: { name: request.viewer!.username, email: request.viewer!.email },
+          expectedOid: input.expectedOid ?? undefined,
+        });
+
+        await syncRepositoryMetadata(access.repository.id, { touchPushedAt: true }).catch(() => {});
+
+        return { ok: true, commitOid: oid, branch: input.branch, fileCount: changes.length };
+      } catch (error) {
+        if (error instanceof GitError) throw validationFailed(error.message);
+        throw error;
+      }
+    },
+  );
 
   app.put<{ Params: { owner: string; repo: string; '*': string } }>(
     '/api/v1/repos/:owner/:repo/contents/*',
@@ -486,32 +594,33 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
         'write',
       );
 
-      const protections = await db
-        .select()
-        .from(branchProtections)
-        .where(eq(branchProtections.repositoryId, access.repository.id));
+      await assertBranchWritable(access.repository.id, input.branch);
 
-      const protection = protections.find((p) => matchesPattern(input.branch, p.pattern));
-      if (protection?.requirePullRequest) {
-        throw validationFailed(
-          `Der Branch "${input.branch}" ist geschützt. Änderungen müssen über einen Pull Request erfolgen.`,
+      const content =
+        input.contentBase64 === null ? null : Buffer.from(input.contentBase64, 'base64');
+
+      if (content && content.length > MAX_COMMIT_BYTES) {
+        throw payloadTooLarge(
+          `${formatSize(content.length)} – erlaubt sind ${formatSize(MAX_COMMIT_BYTES)} je Commit. ` +
+            'Größere Dateien gehören über `git push` ins Repository.',
         );
       }
 
       try {
         const oid = await commitFileChange(access.repository.id, {
           branch: input.branch,
+          ...(input.startBranch !== undefined ? { startBranch: input.startBranch } : {}),
           path: request.params['*'] ?? '',
-          content: input.contentBase64 === null ? null : Buffer.from(input.contentBase64, 'base64'),
+          content,
           message: input.message,
           author: { name: request.viewer!.username, email: request.viewer!.email },
           expectedOid: input.expectedOid ?? undefined,
           newPath: input.newPath,
         });
 
-        await syncRepositoryMetadata(access.repository.id).catch(() => {});
+        await syncRepositoryMetadata(access.repository.id, { touchPushedAt: true }).catch(() => {});
 
-        return { ok: true, commitOid: oid };
+        return { ok: true, commitOid: oid, branch: input.branch };
       } catch (error) {
         if (error instanceof GitError) {
           throw validationFailed(error.message);
@@ -520,6 +629,13 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
       }
     },
   );
+}
+
+/** Bytes in eine Angabe, die in einer Fehlermeldung etwas aussagt. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**

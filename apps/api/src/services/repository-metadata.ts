@@ -61,8 +61,18 @@ export async function computeLanguages(
 
 /**
  * Aktualisiert Sprachen, Hauptsprache und Größe eines Repositories.
+ *
+ * `touchPushedAt` setzt zusätzlich den Zeitpunkt der letzten Änderung. Wer
+ * über die Oberfläche committet, pusht nicht – trotzdem hat sich das
+ * Repository geändert. Ohne diesen Schalter stand bei einem Projekt, das nur
+ * im Browser bearbeitet wurde, dauerhaft „Letzter Push: nie", und das
+ * Dashboard, das danach sortiert, zeigte es nie an.
  */
-export async function syncRepositoryMetadata(repositoryId: string): Promise<void> {
+export async function syncRepositoryMetadata(
+  repositoryId: string,
+  options: { touchPushedAt?: boolean } = {},
+): Promise<void> {
+  const touched = options.touchPushedAt ? { pushedAt: new Date() } : {};
   const [repo] = await db
     .select({ defaultBranch: repositories.defaultBranch })
     .from(repositories)
@@ -77,7 +87,7 @@ export async function syncRepositoryMetadata(repositoryId: string): Promise<void
   if (empty) {
     await db
       .update(repositories)
-      .set({ languages: {}, primaryLanguage: null, sizeBytes, isEmpty: true })
+      .set({ languages: {}, primaryLanguage: null, sizeBytes, isEmpty: true, ...touched })
       .where(eq(repositories.id, repositoryId));
     return;
   }
@@ -91,6 +101,7 @@ export async function syncRepositoryMetadata(repositoryId: string): Promise<void
       primaryLanguage: primaryLanguageFrom(languages),
       sizeBytes,
       isEmpty: false,
+      ...touched,
     })
     .where(eq(repositories.id, repositoryId));
 
