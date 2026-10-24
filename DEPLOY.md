@@ -238,6 +238,44 @@ Werten zu laufen.
 
 ---
 
+## Wenn ein KI-Assistent das Repository nicht erreicht
+
+Fehlerbild im Assistenten:
+
+```
+fatal: unable to access 'https://gothub-q0p7.onrender.com/git/<benutzer>/<repo>.git/':
+CONNECT tunnel failed, response 403
+```
+
+Das ist **kein Fehler auf dem Server**. `CONNECT tunnel failed` meldet der
+Proxy des Assistenten, bevor die Anfrage den Server erreicht. Die meisten
+Assistenten laufen in einem Sandkasten, der nur eine feste Liste von Adressen
+zulässt; GitHub steht darauf, `onrender.com` nicht. Der Server sieht von so
+einer Anfrage nichts, und keine Änderung am Code ändert daran etwas.
+
+Zwei Wege:
+
+**1. Die Adresse im Assistenten erlauben.** Bei Claude unter
+*Einstellungen → Capabilities* `gothub-q0p7.onrender.com` zur Liste der
+erlaubten Domains hinzufügen. Wirkt sofort, ohne Änderung am Projekt. Gilt
+nur für diesen einen Assistenten.
+
+**2. Nach GitHub spiegeln.** *Repository → Einstellungen → Spiegelung*, Richtung
+*hinaus*, Adresse des GitHub-Repositories und ein Personal Access Token mit
+`repo`. Danach schiebt Forge nach jedem Push automatisch weiter. Du arbeitest
+weiter gegen Forge; der Assistent klont die Kopie auf GitHub und kommt damit
+überall durch.
+
+Bei einer Spiegelung hinaus ist das GitHub-Repository eine Kopie: Push dorthin
+würde beim nächsten Lauf überschrieben. Änderungen des Assistenten kommen über
+einen Pull Request oder einen Patch zurück nach Forge.
+
+Der Haken *exakte Kopie* schaltet `git push --mirror`. Das löscht auf der
+Gegenseite Branches, die es in Forge nicht gibt. Ohne den Haken werden nur
+Branches und Tags aktualisiert, gelöscht wird nichts.
+
+---
+
 ## Was auf Render nicht läuft
 
 | Funktion | Grund |

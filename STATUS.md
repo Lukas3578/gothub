@@ -4,8 +4,8 @@ Maßstab dieser Liste: durch automatisierte Tests oder einen nachvollzogenen
 Durchlauf gegen den laufenden Server belegt. Was nur im Schema vorbereitet ist,
 steht unter „Nicht implementiert" – nicht bei den fertigen Funktionen.
 
-Stand: 24.10.2026 · 162 Tests (135 Backend, 27 Frontend), alle grün ·
-36.800 Zeilen · 61 Tabellen · 208 HTTP-Endpunkte · vier Pakete typgeprüft
+Stand: 24.10.2026 · 201 Tests (174 Backend, 27 Frontend), alle grün ·
+39.300 Zeilen · 62 Tabellen · 216 HTTP-Endpunkte · vier Pakete typgeprüft
 
 ---
 
@@ -171,6 +171,29 @@ Deaktivierung nach wiederholtem Fehlschlag.
 *Belegt:* SSRF-Schutz erkennt interne Adressbereiche; das Geheimnis wird nur
 beim Anlegen zurückgegeben.
 
+### Spiegelung auf andere Git-Hoster
+Je Repository eine Spiegelung, Richtung *hinaus* (nach jedem Push schiebt
+Forge an die Gegenseite weiter) oder *herein* (Forge holt alle fünf Minuten).
+Beide Richtungen gleichzeitig werden abgelehnt, weil sie sich gegenseitig
+überschreiben würden. Verbindungsprüfung über `ls-remote` vor dem ersten
+echten Lauf, Pausieren, manuelles Auslösen, Statusanzeige mit letzter
+Fehlermeldung. Eine Lease verhindert zwei gleichzeitige Läufe.
+
+Anlass: Werkzeuge, die eine selbst betriebene Instanz nicht erreichen – der
+Sandkasten vieler KI-Assistenten lässt nur eine feste Liste von Adressen zu.
+
+*Belegt:* 24 Tests. Die Adressprüfung weist `http`, eingebettete Zugangsdaten,
+Loopback, private Netze und die Cloud-Metadaten-Adresse ab. Das Token kommt
+weder aus der Einzelansicht noch aus der Liste zurück und steht verschlüsselt
+in der Datenbank; ohne neue Eingabe bleibt es beim Bearbeiten erhalten, ein
+leerer String entfernt es. Die Maskierung in Fehlermeldungen ist einzeln
+geprüft.
+
+*Nicht belegt:* eine echte Übertragung nach GitHub. Dafür braucht es ein
+gültiges Token und eine Netzverbindung; beides lässt sich in einem Test nicht
+ehrlich nachstellen. Geprüft ist der Weg bis zum Aufruf von Git, nicht die
+Übertragung selbst.
+
 ### E-Mail
 Zwei Transportwege: `console` schreibt Nachrichten in das Serverprotokoll
 (Entwicklung), `smtp` verschickt über einen echten Mailserver mit STARTTLS
@@ -264,7 +287,7 @@ Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
 | Bereich | Stand |
 |---|---|
 | Discussions | vollständig offen |
-| Repository-Import von außen | offen; ein bestehendes Projekt lässt sich per Push übertragen |
+| Repository-Import von außen | kein Import-Formular beim Anlegen; stattdessen Push oder eine Spiegelung in Richtung *herein* |
 | Docker- und Maven-Registry | das Paket-Schema ist formatneutral angelegt, Protokoll-Endpunkte gibt es nur für npm |
 | Organisationsweite Projektboards | Tabelle vorbereitet, Endpunkte nur je Repository |
 | Mehrprozessbetrieb der Benachrichtigungen | SSE läuft über einen prozesslokalen EventEmitter; hinter mehreren API-Instanzen braucht es Redis Pub/Sub (die Schnittstelle ist auf eine Datei begrenzt) |
@@ -289,6 +312,12 @@ Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
 - **Webhook-Zustellung nur negativ geprüft.** Der SSRF-Schutz ist getestet, eine
   erfolgreiche Zustellung an einen externen Empfänger nicht – ausgehende
   Verbindungen sind in dieser Umgebung gesperrt.
+- **Spiegelung nicht gegen einen echten Hoster geprüft.** Adressprüfung,
+  Token-Behandlung, Lease und Maskierung sind getestet; eine echte Übertragung
+  nach GitHub nicht, weil ausgehende Verbindungen in dieser Umgebung gesperrt
+  sind und ein gültiges Token fehlt. *Verbindung prüfen* in der Oberfläche ist
+  genau dafür da: es überträgt nichts und meldet Adress- oder Token-Fehler
+  sofort.
 - **SMTP-Versand nicht geprüft.** Die Umsetzung steht, ein echter Mailserver war
   nicht erreichbar. Die Admin-Route `/api/v1/admin/mail/check` prüft die
   Verbindung beim Einrichten.

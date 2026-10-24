@@ -155,6 +155,44 @@ URL landet in `.git/config`):
 git clone http://<benutzer>:<token>@localhost:4000/git/<benutzer>/<repo>.git
 ```
 
+## Auf GitHub oder GitLab spiegeln
+
+*Repository → Einstellungen → Spiegelung.* Zwei Richtungen, je Repository
+jeweils eine und nicht beide gleichzeitig:
+
+| Richtung | Verhalten |
+|---|---|
+| **hinaus** (push) | Nach jedem Push an Forge schiebt Forge alle Branches und Tags an die angegebene Adresse weiter. |
+| **herein** (pull) | Forge holt alle fünf Minuten von der angegebenen Adresse. Das Repository ist dann eine Kopie. |
+
+Nötig sind die https-Adresse des Gegenstücks und ein Token mit Schreibrecht
+(bei GitHub ein Personal Access Token mit `repo`). *Verbindung prüfen* fragt
+nur die Referenzen ab und überträgt nichts – damit fällt ein falsches Token
+beim Einrichten auf und nicht erst beim nächsten Push.
+
+Wozu das gut ist: Werkzeuge, die eine selbst betriebene Instanz nicht
+erreichen. Der Sandkasten vieler KI-Assistenten lässt nur eine feste Liste
+von Adressen zu; GitHub steht darauf, eine eigene Domain nicht. Mit einer
+Spiegelung hinaus arbeitest du weiter gegen Forge, und das Werkzeug klont die
+Kopie auf GitHub.
+
+Zum Umgang mit dem Token:
+
+- Es wird mit `ENCRYPTION_KEY` verschlüsselt gespeichert und nie wieder
+  ausgeliefert. Die API gibt nur `hasToken: true` zurück.
+- Es steht nicht in der Kommandozeile. Git bekommt es über eine temporäre
+  Datei mit Rechten 0600 (`credential.helper=store --file=…`); in der
+  Prozessliste erscheint nur deren Pfad.
+- Fehlermeldungen der Gegenseite werden maskiert, bevor sie gespeichert
+  werden.
+
+Die Zieladresse wird geprüft, bevor etwas passiert: nur `https`, keine
+Zugangsdaten in der Adresse, und der aufgelöste Hostname darf nicht in einem
+internen Netzbereich liegen. Ohne diese Prüfung wäre eine Spiegelung auf
+`https://169.254.169.254/` ein Weg zu Cloud-Metadaten.
+
+Nachgewiesen in `apps/api/src/__tests__/mirrors.test.ts`.
+
 ## Architektur
 
 ```
@@ -164,7 +202,7 @@ forge/
 │   │   ├── src/
 │   │   │   ├── config.ts       validierte Konfiguration, bricht beim Start ab
 │   │   │   ├── db/
-│   │   │   │   ├── schema.ts   Drizzle-Schema, 55 Tabellen
+│   │   │   │   ├── schema.ts   Drizzle-Schema, 62 Tabellen
 │   │   │   │   └── migrate.ts  Migrationsläufer
 │   │   │   ├── git/
 │   │   │   │   ├── exec.ts     gehärteter Aufruf von Git-Unterprozessen
@@ -232,6 +270,7 @@ man an einer Stelle vergessen kann.
 | Profilbilder | Typ an den Magic Bytes erkannt, nicht am Content-Type; SVG ausgeschlossen, weil es Skripte enthalten kann |
 | Gists und Wiki | Dateinamen werden normalisiert statt interpretiert; ein Name wie `../../x` wird zu `x`, nicht zu einem Pfad |
 | Webhooks | HMAC-SHA256-Signatur, SSRF-Schutz gegen interne Adressbereiche |
+| Spiegelung | nur `https`, SSRF-Schutz in jeder Umgebung; Token verschlüsselt, über eine 0600-Datei an Git übergeben statt über die Kommandozeile, in Fehlermeldungen maskiert |
 | Rohdateien | immer `octet-stream` als Anhang, `nosniff`, restriktive CSP |
 | Secrets | AES-256-GCM, Schlüssel aus `ENCRYPTION_KEY` |
 | Rate-Limiting | global pro Benutzer bzw. IP; Git-Routen ausgenommen |
