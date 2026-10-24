@@ -14,11 +14,19 @@
     "dev": "concurrently -n api,web -c cyan,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "npm run dev --workspace @forge/api",
     "dev:web": "npm run dev --workspace @forge/web",
-    "build": "npm run build --workspace @forge/shared && npm run build --workspace @forge/api && npm run build --workspace @forge/web",
+    "build": "npm run build:shared && npm run build:api && npm run build:web",
+    "build:shared": "npm run build --workspace @forge/shared",
+    "build:api": "npm run build:shared && npm run build --workspace @forge/api",
+    "build:web": "npm run build:shared && npm run build --workspace @forge/web",
+    "start": "npm run start:api",
+    "start:api": "npm run db:migrate && node apps/api/dist/server.js",
+    "start:web": "node apps/web/server.mjs",
     "db:generate": "npm run db:generate --workspace @forge/api",
-    "db:migrate": "npm run db:migrate --workspace @forge/api",
-    "test": "npm run test --workspace @forge/api",
-    "typecheck": "npm run typecheck --workspaces --if-present"
+    "db:migrate": "node apps/api/dist/db/migrate.js",
+    "db:migrate:dev": "npm run db:migrate --workspace @forge/api",
+    "test": "npm run test --workspace @forge/api && npm run test --workspace @forge/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:deployment": "npm run test:deployment --workspace @forge/api"
   },
   "devDependencies": {
     "concurrently": "^9.1.2",
