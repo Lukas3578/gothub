@@ -4,8 +4,8 @@ Maßstab dieser Liste: durch automatisierte Tests oder einen nachvollzogenen
 Durchlauf gegen den laufenden Server belegt. Was nur im Schema vorbereitet ist,
 steht unter „Nicht implementiert" – nicht bei den fertigen Funktionen.
 
-Stand: 24.10.2026 · 201 Tests (174 Backend, 27 Frontend), alle grün ·
-39.300 Zeilen · 62 Tabellen · 216 HTTP-Endpunkte · vier Pakete typgeprüft
+Stand: 24.10.2026 · 221 Tests (190 Backend, 31 Frontend), alle grün ·
+41.000 Zeilen · 62 Tabellen · 217 HTTP-Endpunkte · vier Pakete typgeprüft
 
 ---
 
@@ -171,6 +171,24 @@ Deaktivierung nach wiederholtem Fehlschlag.
 *Belegt:* SSRF-Schutz erkennt interne Adressbereiche; das Geheimnis wird nur
 beim Anlegen zurückgegeben.
 
+### Dateien im Browser bearbeiten
+Anlegen, Bearbeiten, Umbenennen, Löschen und Hochladen mehrerer Dateien, je
+mit Commit-Nachricht und optionaler Beschreibung. Editor ist CodeMirror 6
+(Zeilennummern, Syntaxhervorhebung aus dem Farbsystem der Anwendung,
+Klammernpaare, Rückgängig-Historie), für Markdown mit Vorschau. Upload per
+Auswahl oder Drag-and-drop, Binärdateien eingeschlossen. Wahlweise direkt auf
+den Branch oder auf einen neuen Branch, der anschließend ins
+Pull-Request-Formular führt – auch der Weg an einem geschützten Branch vorbei.
+
+*Belegt:* 16 API-Tests und ein vollständiger Durchlauf im echten Browser
+(siehe „Browserdurchlauf"). Geprüft sind unter anderem: Umlaute und
+CRLF kommen unverändert zurück, Umbenennen hinterlässt keine Kopie, ein
+Upload von drei Dateien ergibt genau einen Commit, Binärinhalte bleiben
+unverfälscht, ein doppelter Pfad wird abgewiesen, ohne einen halben Commit zu
+hinterlassen, ein veralteter Stand wird nicht überschrieben, ein geschützter
+Branch lässt direktes Schreiben nicht zu, den Umweg über einen Branch aber
+schon.
+
 ### Spiegelung auf andere Git-Hoster
 Je Repository eine Spiegelung, Richtung *hinaus* (nach jedem Push schiebt
 Forge an die Gegenseite weiter) oder *herein* (Forge holt alle fünf Minuten).
@@ -217,8 +235,28 @@ Rate-Limit-Übersicht, Mailtransport-Prüfung.
 
 ### Oberfläche
 Eigenes Design-System: eckige Elemente, dezente Linien, warme Neutraltöne, ein
-Akzentton, keine Verläufe. Helles und dunkles Theme. Responsiv ab
+Akzentton, keine Verläufe, keine Schatten – Tiefe entsteht über
+Flächenhelligkeit und Linien. Helles und dunkles Theme. Responsiv ab
 Telefonbreite.
+
+Überarbeitet nach einem Durchgang im echten Browser:
+
+- Die helle Leinwand war praktisch weiß; Flächen hoben sich nur durch ihre
+  Linie ab. Ein spürbarer Schritt zwischen Leinwand und Fläche stellt die
+  Ebenen her.
+- Der Akzent erreichte mit weißer Schrift nur 4,4:1 und verfehlte die
+  Schwelle für Text auf Schaltflächen; er ist jetzt tiefer.
+- Fließtext liegt bei 15 px mit begrenzter Zeilenlänge (72 Zeichen).
+  Über die volle Spaltenbreite wurden Zeilen rund 160 Zeichen lang.
+- In Markdown trugen h1 und h2 je eine Trennlinie, was READMEs wie einen
+  Stapel Linien wirken ließ; jetzt nur noch h1.
+- Avatarfarben kamen aus dem vollen Farbkreis bei 42 % Sättigung und
+  stellten regelmäßig ein kräftiges Indigo neben den warmen Akzent. Jetzt
+  zwölf feste Stufen bei 24 %.
+- Issues und Pull Requests haben eine senkrechte Linie, die Eröffnungsbeitrag,
+  Kommentare und Ereignisse als Abfolge zusammenhält.
+- Die Seitenbreite stand an sieben Stellen im Quelltext; jetzt an einer, und
+  bei 1280 statt 1400 px.
 
 Seiten: Landing, Anmeldung, Registrierung, Passwort vergessen/zurücksetzen,
 Dashboard, Repository anlegen, Entdecken, Suche, Benachrichtigungen, Profil,
@@ -235,49 +273,82 @@ Projektboards und Einstellungen.
 
 Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
 
-1. **Git-Prozess wurde zu früh beendet.** Der Abbruch hing am `close`-Event des
+1. **Zwei Kopien derselben CodeMirror-Pakete.** Beim Nachinstallieren waren
+   `@codemirror/state`, `view`, `language` und `@lezer/highlight` mit einer
+   älteren Untergrenze angegeben worden, als npm ohnehin aufgelöst hatte.
+   Ergebnis: eine zweite, verschachtelte Kopie je Paket. Die Marken (`tags`)
+   aus der einen Kopie sind andere Objekte als die der anderen, also griff im
+   Editor keine einzige Hervorhebungsregel – Code stand einfarbig da. Weder
+   Typprüfung noch Rendertests sehen so etwas; sichtbar wurde es erst im
+   Browser. Behoben, indem die Versionsbereiche auf den bereits aufgelösten
+   Stand angehoben wurden, sodass npm wieder auf je eine Kopie zusammenführt.
+
+2. **Der Editor verschluckte Zeichen beim schnellen Tippen.** Jede Eingabe
+   meldete den neuen Text nach oben, React stellte ihn verzögert wieder zu,
+   und der Abgleich schrieb diesen inzwischen veralteten Stand zurück in das
+   Dokument. Aus „MIT. Siehe README." wurde „MIT. Siehe .". Behoben über den
+   Fokus: tippt jemand, ist der Editor die Quelle und ein von außen
+   eintreffender Wert wird nicht übernommen.
+
+3. **Die Sprache landete an einer bereits verworfenen Editor-Instanz.** Das
+   Nachladen des Sprachmoduls ist asynchron, der Aufbau nicht. Fiel das
+   Ergebnis zwischen Aufbau und dem zusätzlichen Neuaufbau an, den React im
+   Entwicklungsmodus vornimmt, stand der neue Editor ohne Sprache da. Das
+   Ergebnis wird jetzt festgehalten und nach jedem Aufbau erneut angelegt.
+
+4. **`spawn git ENOENT` als Meldung für ein fehlendes Repository.** Node
+   meldet denselben Fehler, wenn das Arbeitsverzeichnis nicht existiert. Beim
+   flüchtigen Dateisystem ist genau das der häufige Fall, und die rohe Meldung
+   schickte den Betreiber auf die Suche nach einer fehlenden Git-Installation.
+   Jetzt wird unterschieden und die tatsächliche Ursache benannt.
+
+5. **Ein Commit über die Oberfläche ließ „Letzter Push: nie" stehen.** Das
+   Repository tauchte dadurch auch im Dashboard nicht auf, das danach
+   sortiert. Web-Commits und Pull-Spiegelungen setzen den Zeitpunkt jetzt.
+
+6. **Git-Prozess wurde zu früh beendet.** Der Abbruch hing am `close`-Event des
    Request-Streams, das in Node bereits feuert, wenn der Body gelesen ist.
    Jeder `git clone` brach mit „expected flush after ref listing" ab.
 
-2. **Dateien ließen sich nicht löschen.** `git update-index --force-remove`
+7. **Dateien ließen sich nicht löschen.** `git update-index --force-remove`
    verlangt ein Arbeitsverzeichnis, das ein Bare-Repository nicht hat. Läuft
    jetzt über `--index-info`.
 
-3. **Irreführender 404 beim Push.** Ein Push ohne Schreibrecht auf ein
+8. **Irreführender 404 beim Push.** Ein Push ohne Schreibrecht auf ein
    *öffentliches* Repository meldete „nicht gefunden".
 
-4. **Secrets wurden nicht aufgelöst.** `interpolate` existierte, wurde aber
+9. **Secrets wurden nicht aufgelöst.** `interpolate` existierte, wurde aber
    nirgends aufgerufen: `${{ secrets.X }}` landete buchstäblich im Kommando.
 
-5. **Secrets lagen unter ihrem Klarnamen in der Umgebung jedes Schritts.** Ein
+10. **Secrets lagen unter ihrem Klarnamen in der Umgebung jedes Schritts.** Ein
    `env` im Log hätte alle offengelegt.
 
-6. **Schritt-`env` expandierte keine Secrets.** Docker ersetzt in `--env-file`
+11. **Schritt-`env` expandierte keine Secrets.** Docker ersetzt in `--env-file`
    und `--env` keine Variablen; die Schritt-Umgebung wird jetzt als
    `export`-Zeilen im Skript gesetzt, mit Quoting, das literale Teile vor der
    Shell schützt.
 
-7. **Einschleusung über die Umgebungsdatei.** Ein Wert mit Zeilenumbruch hätte
+12. **Einschleusung über die Umgebungsdatei.** Ein Wert mit Zeilenumbruch hätte
    beliebige weitere Variablen gesetzt (etwa `PATH`).
 
-8. **Secrets erschienen im Log.** Werden jetzt vor dem Senden durch `***`
+13. **Secrets erschienen im Log.** Werden jetzt vor dem Senden durch `***`
    ersetzt.
 
-9. **Artefakte fehlten in der Laufansicht.** Sie wurden hochgeladen, aber nicht
+14. **Artefakte fehlten in der Laufansicht.** Sie wurden hochgeladen, aber nicht
    mitgeliefert.
 
-10. **Doppelte Typdefinitionen.** Beim Entdoppeln der gemeinsamen Typen wurde
+15. **Doppelte Typdefinitionen.** Beim Entdoppeln der gemeinsamen Typen wurde
     die Fassung entfernt, gegen die der vorhandene Code geschrieben war – 23
     Compilerfehler auf einen Schlag. Die Typen wurden an die Implementierung
     angeglichen, weil auch die Oberfläche gegen diese Shapes gebaut war.
 
-11. **`npm publish` schlug fehl.** Der npm-Client sendet nicht belegte Felder
+16. **`npm publish` schlug fehl.** Der npm-Client sendet nicht belegte Felder
     als `null` statt sie wegzulassen; das Schema verlangte `undefined`.
 
-12. **ssh2 ließ sich nicht importieren.** Das Paket ist CommonJS ohne benannte
+17. **ssh2 ließ sich nicht importieren.** Das Paket ist CommonJS ohne benannte
     ESM-Exporte; nur der Default-Import funktioniert unter Node mit ESM.
 
-13. **SSH-Hostschlüssel im falschen Format.** ssh2 liest ed25519 nur im
+18. **SSH-Hostschlüssel im falschen Format.** ssh2 liest ed25519 nur im
     OpenSSH-Format, das Node nicht erzeugt – jetzt RSA 3072 als PKCS#1-PEM.
 
 ---
@@ -297,14 +368,14 @@ Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
 
 ## Bekannte Einschränkungen
 
-- **Kein visueller Browsertest.** Alle vier Pakete sind typgeprüft, das
-  Frontend baut fehlerfrei, 27 Rendertests montieren jede Seite und prüfen auf
-  Absturz und erwartete Inhalte, und jeder Endpunkt, den die Oberfläche
-  aufruft, ist durch Backend-Tests abgedeckt. Ein Durchklicken im echten
-  Browser fand nicht statt, weil sich in dieser Umgebung kein Chromium
-  installieren ließ. Layout- und Interaktionsfehler, die nur so auffallen, sind
-  weiterhin möglich. **Das ist der erste Punkt, den du lokal selbst prüfen
-  solltest.**
+- **Browserdurchlauf jetzt vorhanden, aber nicht flächendeckend.** Chromium
+  steht inzwischen zur Verfügung. Geprüft wurden: alle 24 Hauptseiten in
+  hellem und dunklem Theme sowie auf Telefonbreite (kein waagerechter
+  Überlauf, keine Seitenfehler, keine Konsolenfehler) und ein vollständiger
+  Durchlauf für Anlegen, Bearbeiten, Hochladen, Löschen und den Weg über
+  einen neuen Branch. **Nicht** durchgeklickt sind Issues, Pull Requests mit
+  Review, Projektboards, Wiki, Gists und die Administration – dort gelten
+  weiterhin nur Render- und Backend-Tests.
 - **`git clone ssh://…` ist nicht end-to-end geprüft.** Der SSH-Dienst wurde
   mit einem SSH-Client getestet (Anmeldung, Ref-Ankündigung, abgewiesene
   Kommandos), aber in dieser Umgebung ist kein `ssh`-Binary installiert, das

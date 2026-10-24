@@ -155,6 +155,39 @@ URL landet in `.git/config`):
 git clone http://<benutzer>:<token>@localhost:4000/git/<benutzer>/<repo>.git
 ```
 
+## Dateien im Browser bearbeiten
+
+*Code → Datei hinzufügen* beziehungsweise *Bearbeiten* in der Dateiansicht.
+Voraussetzung ist Schreibzugriff auf das Repository.
+
+| Aktion | Weg |
+|---|---|
+| Datei anlegen | Code → *Datei hinzufügen* → *Neue Datei anlegen* |
+| Dateien hochladen | Code → *Datei hinzufügen* → *Dateien hochladen* (auch per Drag-and-drop, auch Binärdateien) |
+| Bearbeiten | Dateiansicht → *Bearbeiten* |
+| Umbenennen | im Editor den Dateinamen ändern |
+| Löschen | Dateiansicht → *Löschen* |
+
+Der Editor ist CodeMirror 6 mit Zeilennummern, Syntaxhervorhebung,
+Klammernpaaren und Rückgängig-Historie; für Markdown gibt es eine Vorschau.
+Die Farben stammen aus demselben Farbsystem wie die Dateiansicht, damit eine
+Datei beim Bearbeiten so aussieht wie beim Lesen.
+
+Jede Änderung endet in einem Commit, und bei jedem Commit lässt sich wählen:
+
+- **direkt auf den Branch** – die Änderung ist sofort drin;
+- **auf einen neuen Branch** – Forge legt ihn aus dem aktuellen Stand an und
+  öffnet anschließend das Formular für den Pull Request. Das ist auch der Weg,
+  wenn der Zielbranch geschützt ist.
+
+Ein Upload mehrerer Dateien ergibt **einen** Commit, nicht einen je Datei.
+Beim Bearbeiten merkt sich die Oberfläche den Stand, auf dem die Änderung
+aufsetzt; hat jemand anderes den Branch zwischenzeitlich verschoben, wird der
+Commit abgelehnt statt fremde Arbeit zu überschreiben.
+
+Grenze ist 6 MB je Commit und 100 Dateien. Größeres gehört über `git push`
+ins Repository – der Weg durch den Browser ist dafür nicht gedacht.
+
 ## Auf GitHub oder GitLab spiegeln
 
 *Repository → Einstellungen → Spiegelung.* Zwei Richtungen, je Repository
