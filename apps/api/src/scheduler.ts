@@ -29,6 +29,20 @@ export function startScheduler(log: FastifyBaseLogger): SchedulerHandle {
     timers.push(setInterval(run, intervalMs));
   };
 
+  /**
+   * Pull-Spiegelungen abgleichen.
+   *
+   * Der Takt ist bewusst grob: ein Spiegel holt höchstens alle zehn Minuten,
+   * auch wenn die Aufgabe häufiger anläuft. Ein engerer Takt würde fremde
+   * Hoster unnötig belasten und wäre für den Zweck – einen Stand nachziehen,
+   * an dem woanders gearbeitet wurde – nicht spürbar besser.
+   */
+  every(5 * 60_000, 'pull-mirrors', async () => {
+    const { runDuePullMirrors } = await import('./services/mirrors.js');
+    const count = await runDuePullMirrors(10 * 60_000);
+    if (count > 0) log.info({ count }, 'Spiegelungen abgeglichen');
+  });
+
   // Verwaiste Jobs freigeben, deren Runner sich nicht mehr meldet.
   every(30_000, 'reclaim-jobs', async () => {
     const count = await reclaimExpiredJobs();

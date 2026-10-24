@@ -15,6 +15,13 @@
       "when": 1792802800073,
       "tag": "0001_lame_weapon_omega",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792852642280,
+      "tag": "0002_youthful_luke_cage",
+      "breakpoints": true
     }
   ]
 }

@@ -368,6 +368,9 @@ function runGitService(
 
       const { syncRepositoryMetadata } = await import('./services/repository-metadata.js');
       await syncRepositoryMetadata(repositoryId).catch(() => {});
+
+      const { triggerPushMirror } = await import('./services/mirrors.js');
+      void triggerPushMirror(repositoryId).catch(() => {});
     }
 
     stream.exit(code ?? 0);

@@ -1667,3 +1667,77 @@ export const projectCardsRelations = relations(projectCards, ({ one }) => ({
   column: one(projectColumns, { fields: [projectCards.columnId], references: [projectColumns.id] }),
   issue: one(issues, { fields: [projectCards.issueId], references: [issues.id] }),
 }));
+
+// ---------------------------------------------------------------------------
+// Spiegelung auf fremde Git-Hoster
+// ---------------------------------------------------------------------------
+
+export const mirrorDirectionEnum = pgEnum('mirror_direction', ['push', 'pull']);
+export const mirrorStatusEnum = pgEnum('mirror_status', ['idle', 'running', 'success', 'failure']);
+
+/**
+ * Spiegelung eines Repositories auf einen anderen Git-Hoster.
+ *
+ * Zweck: Werkzeuge, die diese Instanz nicht erreichen können – etwa
+ * KI-Assistenten, deren Sandkasten nur bestimmte Adressen zulässt –, über
+ * GitHub o. Ä. am Projekt arbeiten lassen.
+ *
+ * Richtung:
+ *  - `push`: nach jedem Push hierher wird der Stand zum Gegenstück geschoben.
+ *  - `pull`: der Stand des Gegenstücks wird hierher übernommen.
+ *
+ * Es gibt bewusst keine automatische Zusammenführung beider Richtungen für
+ * dasselbe Repository: wer auf beiden Seiten schreibt, erzeugt Konflikte, die
+ * eine Spiegelung nicht auflösen kann. Die Oberfläche lässt deshalb je
+ * Repository nur eine Richtung zu.
+ */
+export const repositoryMirrors = pgTable(
+  'repository_mirrors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    repositoryId: uuid('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+
+    direction: mirrorDirectionEnum('direction').notNull(),
+    /** Adresse des Gegenstücks, immer https. Ohne Zugangsdaten. */
+    remoteUrl: varchar('remote_url', { length: 1000 }).notNull(),
+    /** Benutzername für die Anmeldung; bei GitHub beliebig, wenn ein Token dient. */
+    remoteUsername: varchar('remote_username', { length: 200 }),
+    /**
+     * Zugangstoken, AES-256-GCM-verschlüsselt. Wird nie zurückgegeben und
+     * gelangt auch nicht in die Prozessargumente – siehe services/mirrors.ts.
+     */
+    tokenEnc: text('token_enc'),
+
+    isEnabled: boolean('is_enabled').notNull().default(true),
+    /**
+     * True: der Gegenstand wird zu einer exakten Kopie, auch durch Löschen
+     * dortiger Branches. False: es werden nur Branches und Tags übertragen,
+     * nichts entfernt.
+     */
+    isExactCopy: boolean('is_exact_copy').notNull().default(false),
+
+    status: mirrorStatusEnum('status').notNull().default('idle'),
+    lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    /** Verhindert, dass zwei Läufe desselben Spiegels sich überschneiden. */
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+
+    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Je Repository und Richtung höchstens ein Spiegel.
+    uniqueIndex('repository_mirrors_repo_direction_key').on(t.repositoryId, t.direction),
+    index('repository_mirrors_pull_idx').on(t.direction, t.isEnabled, t.lastSyncAt),
+  ],
+);
+
+export const repositoryMirrorsRelations = relations(repositoryMirrors, ({ one }) => ({
+  repository: one(repositories, {
+    fields: [repositoryMirrors.repositoryId],
+    references: [repositories.id],
+  }),
+}));

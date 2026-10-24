@@ -601,6 +601,12 @@ async function onPushCompleted(
   // Sprachen und Commit-Index im Hintergrund aktualisieren.
   await syncRepositoryMetadata(repositoryId).catch(() => {});
 
+  // Spiegelung anstoßen. Ohne await und mit catch: ein nicht erreichbares
+  // Gegenstück darf den Push des Benutzers weder verzögern noch scheitern
+  // lassen. Das Ergebnis steht danach in den Repository-Einstellungen.
+  const { triggerPushMirror } = await import('../services/mirrors.js');
+  void triggerPushMirror(repositoryId).catch(() => {});
+
   if (!nowEmpty) {
     await onPushWorkflows(repositoryId, userId);
   }

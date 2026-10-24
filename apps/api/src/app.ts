@@ -33,6 +33,7 @@ import { registerWikiRoutes } from './routes/wiki.js';
 import { registerGistRoutes } from './routes/gists.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerNpmRegistryRoutes } from './routes/npm-registry.js';
+import { registerMirrorRoutes } from './routes/mirrors.js';
 import { registerDashboardRoutes } from './routes/dashboard.js';
 import { registerGitHttpRoutes } from './git/http.js';
 
@@ -221,6 +222,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerGistRoutes(app);
   await registerProjectRoutes(app);
   await registerNpmRegistryRoutes(app);
+  await registerMirrorRoutes(app);
   await registerDashboardRoutes(app);
   await registerGitHttpRoutes(app);
 
