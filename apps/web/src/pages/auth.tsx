@@ -5,7 +5,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { Viewer } from '@forge/shared';
-import { ApiRequestError, api } from '../lib/api.js';
+import { ApiRequestError, BASE_URL, api } from '../lib/api.js';
 import { useSession } from '../lib/session.js';
 import { Alert, Button, Input, Panel } from '../components/ui.js';
 import { ForgeMark } from '../components/Shell.js';
@@ -15,6 +15,9 @@ import { ForgeMark } from '../components/Shell.js';
 // ---------------------------------------------------------------------------
 
 export function LandingPage() {
+  // Die Beispieladresse zeigt auf die tatsächliche API, nicht auf localhost.
+  const gitBase = `${BASE_URL}/git`;
+
   return (
     <div className="mx-auto max-w-[1400px] px-4">
       <section className="border-b border-line py-20">
@@ -84,7 +87,7 @@ export function LandingPage() {
         <pre className="mt-4 max-w-2xl overflow-x-auto border border-line bg-surface p-4 font-mono text-[0.8125rem] leading-relaxed text-muted">
           <code>
             <span className="text-faint">$</span> git remote add origin
-            http://localhost:4000/git/<span className="text-accent">dein-name</span>/projekt.git
+            {gitBase}/<span className="text-accent">dein-name</span>/projekt.git
             {'\n'}
             <span className="text-faint">$</span> git push -u origin main
           </code>

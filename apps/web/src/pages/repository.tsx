@@ -26,7 +26,7 @@ import type {
   TreeEntry,
 } from '@forge/shared';
 import { hasAccess } from '@forge/shared';
-import { ApiRequestError, api } from '../lib/api.js';
+import { ApiRequestError, BASE_URL, api } from '../lib/api.js';
 import { useSession } from '../lib/session.js';
 import {
   Alert,
@@ -784,7 +784,7 @@ function FileView({ repo }: RepoContext) {
         }
         actions={
           <a
-            href={`${import.meta.env.VITE_API_URL ?? 'http://localhost:4000'}/api/v1/repos/${repo.ownerName}/${repo.name}/raw/${path}?ref=${encodeURIComponent(ref)}`}
+            href={`${BASE_URL}/api/v1/repos/${repo.ownerName}/${repo.name}/raw/${path}?ref=${encodeURIComponent(ref)}`}
             className="text-2xs text-muted hover:text-ink"
           >
             Rohdatei

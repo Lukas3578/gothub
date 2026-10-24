@@ -14,7 +14,7 @@ import type {
   TeamSummary,
 } from '@forge/shared';
 import { hasAccess } from '@forge/shared';
-import { BASE_URL, api } from '../lib/api.js';
+import { BASE_URL, api, apiUpload } from '../lib/api.js';
 import { useSession } from '../lib/session.js';
 import {
   Alert,
@@ -292,24 +292,18 @@ function AssetUpload({
     try {
       // Der Rohinhalt wird direkt gesendet; der Dateiname steht im Header,
       // damit der Server ihn nicht aus dem Body raten muss.
-      const response = await fetch(
-        `${BASE_URL}/api/v1/repos/${repoPath}/releases/${encodeURIComponent(tag)}/assets`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'content-type': 'application/octet-stream',
-            'x-forge-filename': file.name,
-            'x-forge-csrf': document.cookie.match(/fg_csrf=([^;]*)/)?.[1] ?? '',
-          },
-          body: file,
-        },
+      // apiUpload beschafft den CSRF-Token und erneuert ihn bei Bedarf.
+      // Vorher stand hier ein Lesen von document.cookie, das bei getrennten
+      // Hosts für Frontend und API nie einen Wert liefern kann.
+      await apiUpload(
+        `/api/v1/repos/${repoPath}/releases/${encodeURIComponent(tag)}/assets`,
+        file,
+        'application/octet-stream',
+        { 'x-forge-filename': file.name },
       );
-      if (!response.ok) {
-        const text = await response.text();
-        alert(`Upload fehlgeschlagen: ${text.slice(0, 200)}`);
-      }
       onDone();
+    } catch (error) {
+      alert(error instanceof Error ? error.message : 'Upload fehlgeschlagen.');
     } finally {
       setBusy(false);
     }

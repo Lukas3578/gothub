@@ -6,7 +6,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { CommitSummary, RepositoryDetail } from '@forge/shared';
 import { hasAccess } from '@forge/shared';
-import { api } from '../lib/api.js';
+import { api, apiUpload } from '../lib/api.js';
 import { useSession } from '../lib/session.js';
 import {
   Alert,
@@ -1204,25 +1204,11 @@ export function AvatarSettings() {
     setBusy(true);
     setError(null);
     try {
-      const response = await fetch(
-        `${(import.meta.env.VITE_API_URL as string) ?? 'http://localhost:4000'}/api/v1/user/avatar`,
-        {
-          method: 'POST',
-          credentials: 'include',
-          headers: {
-            'content-type': file.type || 'application/octet-stream',
-            'x-forge-csrf': decodeURIComponent(
-              document.cookie.match(/(?:^|; )fg_csrf=([^;]*)/)?.[1] ?? '',
-            ),
-          },
-          body: file,
-        },
-      );
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.error?.message ?? 'Upload fehlgeschlagen.');
-      }
+      // apiUpload kümmert sich um den CSRF-Token und sendet den rohen Körper.
+      // Vorher stand hier ein eigener fetch-Aufruf, der den Token aus
+      // document.cookie lesen wollte – was bei getrennten Hosts für Frontend
+      // und API nie funktionieren kann.
+      await apiUpload('/api/v1/user/avatar', file, file.type || 'application/octet-stream');
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload fehlgeschlagen.');
