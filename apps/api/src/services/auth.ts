@@ -115,7 +115,7 @@ export async function registerUser(input: RegisterInput): Promise<AuthenticatedU
 
     // Der erste Account der Instanz wird Administrator, damit das
     // Admin-Dashboard ohne manuellen Datenbankeingriff erreichbar ist.
-    const countRows = await tx.select({ count: sql<number>`count(*)::int` }).from(users);
+    const countRows = await tx.select({ count: sql<number>`count(*)` }).from(users);
     const isFirstUser = (countRows[0]?.count ?? 0) === 0;
 
     const [user] = await tx

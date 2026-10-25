@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { namespaces, sshKeys, users } from '../db/schema.js';
-import { conflict, notFound, validationFailed } from '../lib/errors.js';
+import { conflict, isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 
 /**
  * Schlüsseltypen, die angenommen werden.
@@ -157,7 +157,7 @@ export async function addKey(
       bits: parsed.bits,
     };
   } catch (error) {
-    if (String(error).includes('ssh_keys_fingerprint_key')) {
+    if (isUniqueViolation(error, 'ssh_keys_fingerprint_key', 'ssh_keys.fingerprint')) {
       // Der Fingerabdruck ist global eindeutig. Wäre er es nur je Benutzer,
       // ließe sich derselbe Schlüssel bei zwei Konten hinterlegen und die
       // Zuordnung einer Verbindung wäre mehrdeutig.

@@ -70,8 +70,8 @@ export async function registerDashboardRoutes(app: FastifyInstance): Promise<voi
     // Offene Issues und Pull Requests, die dem Benutzer gehören.
     const [issueCounts] = await db
       .select({
-        openIssues: sql<number>`count(*) FILTER (WHERE ${issues.kind} = 'issue')::int`,
-        openPullRequests: sql<number>`count(*) FILTER (WHERE ${issues.kind} = 'pull_request')::int`,
+        openIssues: sql<number>`count(*) FILTER (WHERE ${issues.kind} = 'issue')`,
+        openPullRequests: sql<number>`count(*) FILTER (WHERE ${issues.kind} = 'pull_request')`,
       })
       .from(issues)
       .innerJoin(repositories, eq(repositories.id, issues.repositoryId))

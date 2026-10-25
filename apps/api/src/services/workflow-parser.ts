@@ -186,6 +186,65 @@ export const RUNNER_IMAGE_MAP: Record<string, string> = {
 export const DEFAULT_IMAGE = 'forge/runner-base:latest';
 
 // ---------------------------------------------------------------------------
+// Schlüssel, die GitHub kennt und Forge nicht
+// ---------------------------------------------------------------------------
+
+/**
+ * Schlüssel, deren stillschweigendes Übergehen die Bedeutung einer Datei
+ * verändern würde.
+ *
+ * Zod verwirft unbekannte Schlüssel ohne Hinweis. Bei `permissions` wäre das
+ * verschmerzbar; bei `strategy: matrix` liefe ein Job, der neunmal laufen
+ * soll, genau einmal – und niemand sähe, dass acht Läufe fehlen. Ein
+ * sichtbarer Fehler ist besser als ein stillschweigend anderer Lauf.
+ *
+ * Der Text nennt jeweils, was stattdessen geht.
+ */
+const UNSUPPORTED_JOB_KEYS: Record<string, string> = {
+  strategy:
+    'Matrix-Läufe gibt es nicht. Schreibe die Varianten als eigene Jobs oder als Schleife in einem run-Schritt.',
+  services:
+    'Begleitcontainer gibt es nicht. Starte den Dienst in einem run-Schritt oder nutze "container" für das Job-Image.',
+  defaults:
+    'Voreinstellungen je Job gibt es nicht. Setze "shell" und "working-directory" am einzelnen Schritt.',
+  outputs: 'Job-Ausgaben gibt es nicht. Gib Ergebnisse als Artefakt weiter.',
+  environment: 'Deployment-Umgebungen mit Freigaben gibt es nicht.',
+  concurrency:
+    'Nebenläufigkeitsgruppen gibt es nicht; ein neuer Lauf bricht einen vorherigen nicht ab.',
+};
+
+const UNSUPPORTED_WORKFLOW_KEYS: Record<string, string> = {
+  concurrency:
+    'Nebenläufigkeitsgruppen gibt es nicht; ein neuer Lauf bricht einen vorherigen nicht ab.',
+  permissions:
+    'Berechtigungen je Lauf gibt es nicht. Ein Lauf bekommt nur die Secrets, die am Repository hinterlegt sind.',
+  defaults: 'Voreinstellungen gibt es nicht. Setze "shell" und "working-directory" am Schritt.',
+};
+
+const UNSUPPORTED_STEP_KEYS: Record<string, string> = {
+  'timeout-minutes':
+    'Zeitgrenzen gelten je Job, nicht je Schritt. Setze "timeout-minutes" am Job.',
+  id: 'Schritt-Kennungen und Verweise darauf gibt es nicht.',
+};
+
+/**
+ * Prüft ein Objekt auf Schlüssel, die hier nicht wirken.
+ * Sammelt alle Funde, damit nicht nach jedem Fehler neu versucht werden muss.
+ */
+function collectUnsupported(
+  value: unknown,
+  known: Record<string, string>,
+  where: string,
+  into: string[],
+): void {
+  if (!value || typeof value !== 'object') return;
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    const hint = known[key];
+    if (hint) into.push(`${where}: "${key}" wird nicht unterstützt. ${hint}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Parsen
 // ---------------------------------------------------------------------------
 
@@ -203,6 +262,31 @@ export function parseWorkflow(source: string, path: string): NormalizedWorkflow 
 
   if (document === null || typeof document !== 'object') {
     throw new WorkflowParseError(`${path}: Die Datei ist leer oder enthält kein Objekt.`);
+  }
+
+  // Vor der Strukturprüfung: Schlüssel melden, die hier wirkungslos wären.
+  const unsupported: string[] = [];
+  const rawDocument = document as Record<string, unknown>;
+  collectUnsupported(rawDocument, UNSUPPORTED_WORKFLOW_KEYS, 'Workflow', unsupported);
+
+  if (rawDocument.jobs && typeof rawDocument.jobs === 'object') {
+    for (const [jobKey, job] of Object.entries(rawDocument.jobs as Record<string, unknown>)) {
+      collectUnsupported(job, UNSUPPORTED_JOB_KEYS, `Job "${jobKey}"`, unsupported);
+
+      const steps = (job as { steps?: unknown }).steps;
+      if (Array.isArray(steps)) {
+        steps.forEach((step, index) => {
+          collectUnsupported(step, UNSUPPORTED_STEP_KEYS, `Job "${jobKey}", Schritt ${index + 1}`, unsupported);
+        });
+      }
+    }
+  }
+
+  if (unsupported.length > 0) {
+    throw new WorkflowParseError(
+      `${path}: Die Datei verwendet Schlüssel, die auf dieser Instanz nichts bewirken.`,
+      unsupported,
+    );
   }
 
   const parsed = workflowSchema.safeParse(document);

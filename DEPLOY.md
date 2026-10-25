@@ -14,7 +14,7 @@ Punkte sich **nicht** aus dem Repository heraus lösen lassen.
 |---|---|
 | Frontend | `https://forge-wuj4.onrender.com` |
 | API | `https://gothub-q0p7.onrender.com` |
-| Datenbank | bestehende PostgreSQL-Instanz auf Render |
+| Datenbank | libSQL bei Turso (kein Render-Dienst) |
 
 Die beiden Adressen stehen an genau zwei Stellen im Repository:
 
@@ -62,7 +62,8 @@ Nötig (im Dashboard setzen, nicht im Repository):
 
 | Variable | Hinweis |
 |---|---|
-| `DATABASE_URL` | interne Verbindungsadresse der Render-Datenbank |
+| `DATABASE_URL` | `libsql://<datenbank>-<org>.turso.io` – aus `turso db show <name> --url` |
+| `TURSO_AUTH_TOKEN` | aus `turso db tokens create <name>` |
 | `SESSION_SECRET` | `openssl rand -base64 48`, mindestens 32 Zeichen |
 | `ENCRYPTION_KEY` | `openssl rand -hex 32`, genau 64 Hex-Zeichen |
 
@@ -84,10 +85,38 @@ Vorgaben im Code und müssen nur gesetzt werden, wenn andere Adressen gelten.
 
 ---
 
+## Turso einrichten
+
+Die Datenbank ist kein Render-Dienst mehr, sondern liegt bei Turso. Einmalig:
+
+```bash
+turso db create forge
+turso db show forge --url      # → libsql://forge-<org>.turso.io
+turso db tokens create forge   # → das Token
+```
+
+Beides im Render-Dashboard des API-Dienstes als `DATABASE_URL` und
+`TURSO_AUTH_TOKEN` hinterlegen. Beim nächsten Deployment legt
+`npm run start:api` die Tabellen an.
+
+Zwei Dinge, die dabei anders sind als bei PostgreSQL:
+
+- **Ein Schreiber zur Zeit.** SQLite serialisiert Schreibzugriffe. Für Forge
+  ist das unkritisch, weil die eigentliche Last – Commits, Trees, Packfiles –
+  im Dateisystem liegt und nicht in der Datenbank. Dort stehen nur Metadaten.
+- **Die Datenbank ist nicht mehr an Render gebunden.** Ein Umzug des
+  API-Dienstes berührt sie nicht, und das Datenbank-Backup macht Turso.
+
 ## Der eine Punkt, der sich nicht im Code lösen lässt
 
 **Git-Repositories liegen im Dateisystem. Das Dateisystem eines Render Web
 Service ist flüchtig.**
+
+Der Wechsel zu Turso ändert daran nichts: dorthin wandern die Metadaten, die
+Git-Daten bleiben auf der Platte. Im Gegenteil – vorher gingen bei einem
+Deployment Datenbank und Platte gemeinsam verloren oder gemeinsam nicht;
+jetzt überlebt die Datenbank mit Sicherheit, die Platte ohne Datenträger
+nicht.
 
 Bei jedem Deployment und jedem Neustart wird es geleert. Die Datenbank ist ein
 eigener Dienst und überlebt. Das Ergebnis: die Oberfläche zeigt Repositories
@@ -181,8 +210,11 @@ npm run test:deployment
 4. Frontend: `npm run build:web` erzeugt `apps/web/dist`, mit der API-Adresse
    aus `.env.production` im Bundle.
 
-Die Migrationen sind durch einen PostgreSQL-Advisory-Lock gegen gleichzeitige
-Läufe abgesichert und brechen den Start ab, wenn sie fehlschlagen. Ein Start
+Die Migrationen sind gegen gleichzeitige Läufe abgesichert und brechen den
+Start ab, wenn sie fehlschlagen. libSQL kennt keine Advisory Locks, deshalb
+dient eine Tabelle als Sperre: der erste Lauf nimmt sie, die übrigen warten.
+Eine Sperre, die nach einem Absturz stehen bleibt, verfällt nach fünf
+Minuten. Ein Start
 mit halb migrierter Datenbank ist schlimmer als kein Start. Die vorhandenen
 Migrationen sind additiv und löschen keine Daten.
 

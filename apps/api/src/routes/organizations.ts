@@ -8,7 +8,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import {
   NAME_PATTERN,
   RESERVED_NAMES,
@@ -33,7 +33,7 @@ import {
   teams,
   users,
 } from '../db/schema.js';
-import { conflict, forbidden, notFound, validationFailed } from '../lib/errors.js';
+import { conflict, forbidden, isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 import { generateToken, hashToken } from '../lib/crypto.js';
 import {
   getOrganizationRole,
@@ -207,12 +207,12 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
     viewerId: string | null,
   ): Promise<OrganizationSummary> {
     const memberRows = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(organizationMembers)
       .where(eq(organizationMembers.organizationId, organization.id));
 
     const repoRows = await db
-      .select({ count: sql<number>`count(*)::int` })
+      .select({ count: sql<number>`count(*)` })
       .from(repositories)
       .where(
         and(
@@ -484,7 +484,7 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
           eq(organizationInvitations.inviteeId, request.viewer!.id),
           isNull(organizationInvitations.acceptedAt),
           isNull(organizationInvitations.declinedAt),
-          sql`${organizationInvitations.expiresAt} > now()`,
+          gt(organizationInvitations.expiresAt, new Date()),
         ),
       );
 
@@ -515,7 +515,7 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
               // Bedingung: sonst ließe sich eine fremde Einladung annehmen.
               eq(organizationInvitations.inviteeId, request.viewer!.id),
               isNull(organizationInvitations.acceptedAt),
-              sql`${organizationInvitations.expiresAt} > now()`,
+              gt(organizationInvitations.expiresAt, new Date()),
             ),
           )
           .limit(1);
@@ -593,13 +593,13 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
         const memberCount = row.isAllMembers
           ? (
               await db
-                .select({ count: sql<number>`count(*)::int` })
+                .select({ count: sql<number>`count(*)` })
                 .from(organizationMembers)
                 .where(eq(organizationMembers.organizationId, organization.id))
             )[0]?.count ?? 0
           : (
               await db
-                .select({ count: sql<number>`count(*)::int` })
+                .select({ count: sql<number>`count(*)` })
                 .from(teamMembers)
                 .where(eq(teamMembers.teamId, row.id))
             )[0]?.count ?? 0;
@@ -607,7 +607,7 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
         const repoCount =
           (
             await db
-              .select({ count: sql<number>`count(*)::int` })
+              .select({ count: sql<number>`count(*)` })
               .from(teamRepositories)
               .where(eq(teamRepositories.teamId, row.id))
           )[0]?.count ?? 0;
@@ -665,7 +665,7 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
         reply.code(201);
         return { id: created!.id, slug: created!.slug };
       } catch (error) {
-        if (String(error).includes('teams_org_slug_key')) {
+        if (isUniqueViolation(error, 'teams_org_slug_key', 'teams.slug')) {
           throw conflict('Ein Team mit diesem Namen existiert bereits.');
         }
         throw error;
@@ -711,7 +711,7 @@ export async function registerOrganizationRoutes(app: FastifyInstance): Promise<
       // als "alle Mitglieder der Organisation".
       const rows = team.isAllMembers
         ? await db
-            .select({ userId: organizationMembers.userId, isMaintainer: sql<boolean>`false` })
+            .select({ userId: organizationMembers.userId, isMaintainer: sql<boolean>`0`.mapWith(Boolean) })
             .from(organizationMembers)
             .where(eq(organizationMembers.organizationId, organization.id))
         : await db

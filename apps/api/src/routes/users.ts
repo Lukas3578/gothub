@@ -18,7 +18,7 @@ import {
   userBlocks,
   users,
 } from '../db/schema.js';
-import { conflict, forbidden, notFound, validationFailed } from '../lib/errors.js';
+import { conflict, forbidden, isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 import { visibleRepositoriesFilter } from '../services/permissions.js';
 import {
   beginTwoFactorSetup,
@@ -60,7 +60,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw notFound('Benutzer nicht gefunden.');
 
     const repositoryCountRows = await db
-      .select({ repositoryCount: sql<number>`count(*)::int` })
+      .select({ repositoryCount: sql<number>`count(*)` })
       .from(repositories)
       .where(
         and(
@@ -70,12 +70,12 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       );
 
     const followerCountRows = await db
-      .select({ followerCount: sql<number>`count(*)::int` })
+      .select({ followerCount: sql<number>`count(*)` })
       .from(follows)
       .where(eq(follows.followingId, row.user.id));
 
     const followingCountRows = await db
-      .select({ followingCount: sql<number>`count(*)::int` })
+      .select({ followingCount: sql<number>`count(*)` })
       .from(follows)
       .where(eq(follows.followerId, row.user.id));
 
@@ -146,7 +146,7 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
         .set({ name: trimmed, nameLower: trimmed.toLowerCase() })
         .where(eq(namespaces.id, request.viewer!.namespaceId));
     } catch (error) {
-      if (String(error).includes('namespaces_name_lower_key')) {
+      if (isUniqueViolation(error, 'namespaces_name_lower_key', 'namespaces.name_lower')) {
         throw conflict('Dieser Benutzername ist bereits vergeben.');
       }
       throw error;

@@ -15,7 +15,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   commitIndex,
@@ -78,11 +78,12 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
 
     conditions.push(
       or(
-        ilike(repositories.name, pattern),
-        ilike(repositories.description, pattern),
+        like(repositories.name, pattern),
+        like(repositories.description, pattern),
         // Themen liegen als JSON-Array; die Textsuche darüber ist für die
-        // erwarteten Mengen ausreichend.
-        sql`${repositories.topics}::text ILIKE ${pattern}`,
+        // erwarteten Mengen ausreichend. SQLite kennt kein ILIKE – LIKE ist
+        // dort für ASCII ohnehin unabhängig von Groß- und Kleinschreibung.
+        sql`${repositories.topics} LIKE ${pattern}`,
       )!,
     );
 
@@ -101,7 +102,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
       .offset((query.page - 1) * query.perPage);
 
     const totalRows = await db
-      .select({ total: sql<number>`count(*)::int` })
+      .select({ total: sql<number>`count(*)` })
       .from(repositories)
       .innerJoin(namespaces, eq(namespaces.id, repositories.ownerNamespaceId))
       .where(where);
@@ -132,7 +133,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
         and(
           eq(users.isActive, true),
           isNull(users.suspendedAt),
-          or(ilike(namespaces.name, pattern), ilike(users.displayName, pattern)),
+          or(like(namespaces.name, pattern), like(users.displayName, pattern)),
         ),
       )
       .limit(query.perPage);
@@ -146,7 +147,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
       })
       .from(organizations)
       .innerJoin(namespaces, eq(namespaces.id, organizations.namespaceId))
-      .where(or(ilike(namespaces.name, pattern), ilike(organizations.displayName, pattern)))
+      .where(or(like(namespaces.name, pattern), like(organizations.displayName, pattern)))
       .limit(query.perPage);
 
     return {
@@ -180,7 +181,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
     const pattern = `%${query.q}%`;
 
     const conditions = [
-      or(ilike(issues.title, pattern), ilike(issues.body, pattern))!,
+      or(like(issues.title, pattern), like(issues.body, pattern))!,
       // Der Unterabfrage-Filter stellt sicher, dass nur Issues aus sichtbaren
       // Repositories erscheinen.
       sql`EXISTS (
@@ -208,7 +209,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
       .limit(query.perPage)
       .offset((query.page - 1) * query.perPage);
 
-    const totalRows = await db.select({ total: sql<number>`count(*)::int` }).from(issues).where(where);
+    const totalRows = await db.select({ total: sql<number>`count(*)` }).from(issues).where(where);
 
     const hydrated = await hydrateIssues(
       rows.map((r) => r.issue),
@@ -234,7 +235,7 @@ export async function registerSearchRoutes(app: FastifyInstance): Promise<void> 
     const pattern = `%${query.q}%`;
 
     const where = and(
-      or(ilike(commitIndex.subject, pattern), ilike(commitIndex.body, pattern))!,
+      or(like(commitIndex.subject, pattern), like(commitIndex.body, pattern))!,
       sql`EXISTS (
         SELECT 1 FROM ${repositories}
         WHERE ${repositories.id} = ${commitIndex.repositoryId}

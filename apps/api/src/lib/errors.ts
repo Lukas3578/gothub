@@ -61,3 +61,31 @@ export const payloadTooLarge = (message: string) => new ApiError('payload_too_la
 
 export const twoFactorRequired = () =>
   new ApiError('two_factor_required', 'Zwei-Faktor-Code erforderlich.');
+
+/**
+ * Erkennt eine verletzte Eindeutigkeit, unabhängig vom Treiber.
+ *
+ * PostgreSQL nennt in der Meldung den Namen des Index
+ * (`repositories_owner_name_key`), SQLite nennt stattdessen die Spalten
+ * (`UNIQUE constraint failed: repositories.owner_namespace_id, …`). Der
+ * Aufrufer übergibt deshalb beides: den Indexnamen und die beteiligten
+ * Spalten. Passt eines davon, war es dieser Index.
+ *
+ * Ohne `hints` wird nur geprüft, *dass* eine Eindeutigkeit verletzt wurde.
+ * Das genügt überall dort, wo eine Tabelle nur einen eindeutigen Index hat.
+ */
+export function isUniqueViolation(error: unknown, ...hints: string[]): boolean {
+  const text = String(
+    error instanceof Error ? `${error.message} ${(error as { cause?: unknown }).cause ?? ''}` : error,
+  );
+
+  const violated =
+    text.includes('UNIQUE constraint failed') || // SQLite / libSQL
+    text.includes('duplicate key value') || // PostgreSQL
+    text.includes('SQLITE_CONSTRAINT_UNIQUE');
+
+  if (!violated) return false;
+  if (hints.length === 0) return true;
+
+  return hints.some((hint) => text.includes(hint));
+}

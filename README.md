@@ -18,35 +18,60 @@ lässt sich ohne Codeänderung austauschen.
 | Komponente | Version | Zweck |
 |---|---|---|
 | Node.js | ≥ 20 | API und Frontend |
-| PostgreSQL | ≥ 14 | Datenhaltung |
 | Git | ≥ 2.30 | Repository-Verwaltung (wird als Prozess aufgerufen) |
 | Redis | ≥ 6 | Caching und Rate-Limiting |
 | Docker | ≥ 24 | nur auf dem Runner-Host: isolierte Workflow-Ausführung |
 
+Die Datenhaltung läuft über **libSQL**. Lokal ist das eine Datei – kein
+Datenbankserver, kein Container, nichts einzurichten. In Betrieb zeigt
+dieselbe Variable auf eine Datenbank bei [Turso](https://turso.tech).
+
 ## Einrichtung
 
 ```bash
-# 1. Dienste starten (Postgres, Redis)
-./scripts/dev-up.sh
-
-# 2. Abhängigkeiten
+# 1. Abhängigkeiten
 npm install
 
-# 3. Konfiguration anlegen und Geheimnisse erzeugen
+# 2. Konfiguration anlegen und Geheimnisse erzeugen
 cp .env.example .env
 sed -i "s|^SESSION_SECRET=.*|SESSION_SECRET=$(openssl rand -base64 48)|" .env
 sed -i "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(openssl rand -hex 32)|" .env
 
-# 4. Datenbank anlegen und migrieren
-createdb forge
+# 3. Datenbank anlegen (legt data/forge.db an)
 npm run db:migrate
 
-# 5. Starten
+# 4. Starten
 npm run dev
 ```
 
+Redis ist optional und nur für Rate-Limiting über mehrere Instanzen nötig;
+ohne läuft alles prozesslokal weiter.
+
 Danach läuft die API auf `http://localhost:4000` und das Frontend auf
 `http://localhost:5173`.
+
+### Auf Turso umstellen
+
+```bash
+turso db create forge
+turso db show forge --url          # libsql://forge-<org>.turso.io
+turso db tokens create forge       # das Token
+```
+
+In die `.env`:
+
+```
+DATABASE_URL=libsql://forge-<org>.turso.io
+TURSO_AUTH_TOKEN=<token>
+```
+
+Danach `npm run db:migrate`. Es ist derselbe Dialekt wie bei der lokalen
+Datei – die Migrationen gelten unverändert.
+
+Ein relativer `file:`-Pfad wird gegen die Projektwurzel aufgelöst, nicht
+gegen das Arbeitsverzeichnis. Sonst zeigte `file:./data/forge.db` je nach
+Startweg auf zwei verschiedene Dateien. Beim Start steht die aufgelöste
+Adresse im Protokoll.
 
 **Der erste registrierte Account wird automatisch Administrator** (steuerbar
 über `FIRST_USER_IS_ADMIN`). In der Entwicklung werden E-Mails nicht
@@ -104,6 +129,52 @@ jobs:
           TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm run build
 ```
+
+## Workflows
+
+Workflow-Dateien liegen in `.github/workflows` oder `.forge/workflows`;
+beides wird gelesen. Das Format ist das von GitHub Actions, sodass eine
+übernommene Datei unverändert läuft:
+
+```yaml
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+```
+
+**Aktionen.** Es gibt keinen Marktplatz: eine Aktion ist hier keine
+heruntergeladene fremde Sammlung, sondern fest im Runner umgesetzt. Fremder
+Code mit Zugriff auf Secrets und den Docker-Socket wäre ein erhebliches
+Risiko. Unterstützt werden die drei, die in fast jedem Workflow stehen –
+jeweils unter ihrem GitHub-Namen und unter `forge/`:
+
+| Aktion | Verhalten |
+|---|---|
+| `actions/checkout` | Der Quelltext ist bereits ausgecheckt, bevor der Container startet; der Schritt quittiert nur. |
+| `actions/setup-node` | Installiert die angegebene Node-Version, falls das Image sie nicht hat. Braucht Netzzugang im Job. |
+| `actions/upload-artifact` | Sammelt Dateien als Artefakt des Laufs. |
+
+Die Version hinter `@` wird gelesen und ignoriert: `@v3` und `@v4` tun
+dasselbe. Jede andere Aktion führt zu einem Fehlschlag mit Hinweis, nicht zu
+einem stillschweigend übersprungenen Schritt.
+
+**Nicht unterstützte Schlüssel werden abgewiesen, nicht übergangen.** Eine
+Datei mit `strategy: matrix` liefe sonst als ein einziger Job, und niemand
+sähe, dass die übrigen fehlen. Betroffen sind `strategy`, `services`,
+`defaults`, `outputs`, `environment`, `concurrency` und `permissions`; die
+Meldung nennt jeweils, was stattdessen geht.
 
 ## Git über SSH
 
@@ -235,7 +306,7 @@ forge/
 │   │   ├── src/
 │   │   │   ├── config.ts       validierte Konfiguration, bricht beim Start ab
 │   │   │   ├── db/
-│   │   │   │   ├── schema.ts   Drizzle-Schema, 62 Tabellen
+│   │   │   │   ├── schema.ts   Drizzle-Schema (libSQL), 62 Tabellen
 │   │   │   │   └── migrate.ts  Migrationsläufer
 │   │   │   ├── git/
 │   │   │   │   ├── exec.ts     gehärteter Aufruf von Git-Unterprozessen

@@ -477,7 +477,7 @@ export async function mergePullRequest(options: {
     await tx
       .update(repositories)
       .set({
-        openPullRequestCount: sql`GREATEST(${repositories.openPullRequestCount} - 1, 0)`,
+        openPullRequestCount: sql`MAX(${repositories.openPullRequestCount} - 1, 0)`,
         pushedAt: new Date(),
       })
       .where(eq(repositories.id, repository.id));

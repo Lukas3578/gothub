@@ -92,7 +92,7 @@ async function runScheduledWorkflows(): Promise<void> {
     })
     .from(workflows)
     .innerJoin(repositories, eq(repositories.id, workflows.repositoryId))
-    .where(and(eq(workflows.isEnabled, true), sql`jsonb_array_length(${workflows.schedules}) > 0`));
+    .where(and(eq(workflows.isEnabled, true), sql`json_array_length(${workflows.schedules}) > 0`));
 
   for (const row of rows) {
     if (!row.hasActions || row.isArchived) continue;

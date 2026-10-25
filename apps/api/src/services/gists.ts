@@ -366,7 +366,7 @@ export async function getGist(gistId: string, viewerId: string | null): Promise<
   if (!row) throw notFound('Gist nicht gefunden.');
 
   const starRows = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(gistStars)
     .where(eq(gistStars.gistId, gistId));
 
@@ -426,7 +426,7 @@ export async function listGists(options: {
       username: namespaces.name,
       displayName: users.displayName,
       avatarPath: users.avatarPath,
-      starCount: sql<number>`(SELECT count(*)::int FROM gist_stars WHERE gist_stars.gist_id = ${gists.id})`,
+      starCount: sql<number>`(SELECT count(*) FROM gist_stars WHERE gist_stars.gist_id = ${gists.id})`,
     })
     .from(gists)
     .leftJoin(users, eq(users.id, gists.ownerId))
@@ -437,7 +437,7 @@ export async function listGists(options: {
     .offset((page - 1) * perPage);
 
   const totalRows = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(gists)
     .where(where);
 
@@ -475,7 +475,7 @@ export async function setGistStar(
   }
 
   const rows = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(gistStars)
     .where(eq(gistStars.gistId, gistId));
   return rows[0]?.count ?? 0;

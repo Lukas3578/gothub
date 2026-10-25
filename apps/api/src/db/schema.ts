@@ -1,5 +1,5 @@
 /**
- * Forge – Datenbankschema (PostgreSQL / Drizzle ORM)
+ * Forge – Datenbankschema (libSQL / Turso, Drizzle ORM)
  *
  * Leitlinien:
  *
@@ -19,68 +19,50 @@
  */
 
 import { relations, sql } from 'drizzle-orm';
+import { randomUUID } from 'node:crypto';
 import {
-  bigint,
-  boolean,
   index,
   integer,
-  jsonb,
-  pgEnum,
-  pgTable,
   primaryKey,
-  smallint,
+  sqliteTable,
   text,
-  timestamp,
   uniqueIndex,
-  uuid,
-  varchar,
-} from 'drizzle-orm/pg-core';
+} from 'drizzle-orm/sqlite-core';
 
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
 
-export const namespaceKindEnum = pgEnum('namespace_kind', ['user', 'organization']);
-export const repoVisibilityEnum = pgEnum('repo_visibility', ['public', 'private', 'internal']);
-export const accessLevelEnum = pgEnum('access_level', ['read', 'triage', 'write', 'maintain', 'admin']);
-export const orgRoleEnum = pgEnum('org_role', ['member', 'admin', 'owner']);
-export const issueKindEnum = pgEnum('issue_kind', ['issue', 'pull_request']);
-export const issueStateEnum = pgEnum('issue_state', ['open', 'closed']);
-export const issueCloseReasonEnum = pgEnum('issue_close_reason', ['completed', 'not_planned', 'duplicate', 'merged']);
-export const mergeStrategyEnum = pgEnum('merge_strategy', ['merge', 'squash', 'rebase']);
-export const mergeableStateEnum = pgEnum('mergeable_state', ['unknown', 'clean', 'conflicted', 'behind', 'blocked']);
-export const reviewStateEnum = pgEnum('review_state', ['pending', 'commented', 'approved', 'changes_requested', 'dismissed']);
-export const runStatusEnum = pgEnum('run_status', [
-  'queued',
-  'waiting',
-  'running',
-  'success',
-  'failure',
-  'cancelled',
-  'timed_out',
-  'skipped',
-]);
-export const runnerStatusEnum = pgEnum('runner_status', ['offline', 'idle', 'busy', 'disabled']);
-export const notificationReasonEnum = pgEnum('notification_reason', [
-  'assign',
-  'author',
-  'comment',
-  'mention',
-  'review_requested',
-  'state_change',
-  'subscribed',
-  'workflow_failure',
-]);
-export const webhookEventEnum = pgEnum('webhook_event', [
-  'push',
-  'issues',
-  'issue_comment',
-  'pull_request',
-  'pull_request_review',
-  'release',
-  'workflow_run',
-]);
-export const auditActorTypeEnum = pgEnum('audit_actor_type', ['user', 'system', 'runner']);
+export const namespaceKindValues = ['user', 'organization'] as const;
+export const namespaceKindEnum = (name: string) => text(name, { enum: namespaceKindValues });
+export const repoVisibilityValues = ['public', 'private', 'internal'] as const;
+export const repoVisibilityEnum = (name: string) => text(name, { enum: repoVisibilityValues });
+export const accessLevelValues = ['read', 'triage', 'write', 'maintain', 'admin'] as const;
+export const accessLevelEnum = (name: string) => text(name, { enum: accessLevelValues });
+export const orgRoleValues = ['member', 'admin', 'owner'] as const;
+export const orgRoleEnum = (name: string) => text(name, { enum: orgRoleValues });
+export const issueKindValues = ['issue', 'pull_request'] as const;
+export const issueKindEnum = (name: string) => text(name, { enum: issueKindValues });
+export const issueStateValues = ['open', 'closed'] as const;
+export const issueStateEnum = (name: string) => text(name, { enum: issueStateValues });
+export const issueCloseReasonValues = ['completed', 'not_planned', 'duplicate', 'merged'] as const;
+export const issueCloseReasonEnum = (name: string) => text(name, { enum: issueCloseReasonValues });
+export const mergeStrategyValues = ['merge', 'squash', 'rebase'] as const;
+export const mergeStrategyEnum = (name: string) => text(name, { enum: mergeStrategyValues });
+export const mergeableStateValues = ['unknown', 'clean', 'conflicted', 'behind', 'blocked'] as const;
+export const mergeableStateEnum = (name: string) => text(name, { enum: mergeableStateValues });
+export const reviewStateValues = ['pending', 'commented', 'approved', 'changes_requested', 'dismissed'] as const;
+export const reviewStateEnum = (name: string) => text(name, { enum: reviewStateValues });
+export const runStatusValues = ['queued', 'waiting', 'running', 'success', 'failure', 'cancelled', 'timed_out', 'skipped',] as const;
+export const runStatusEnum = (name: string) => text(name, { enum: runStatusValues });
+export const runnerStatusValues = ['offline', 'idle', 'busy', 'disabled'] as const;
+export const runnerStatusEnum = (name: string) => text(name, { enum: runnerStatusValues });
+export const notificationReasonValues = ['assign', 'author', 'comment', 'mention', 'review_requested', 'state_change', 'subscribed', 'workflow_failure',] as const;
+export const notificationReasonEnum = (name: string) => text(name, { enum: notificationReasonValues });
+export const webhookEventValues = ['push', 'issues', 'issue_comment', 'pull_request', 'pull_request_review', 'release', 'workflow_run',] as const;
+export const webhookEventEnum = (name: string) => text(name, { enum: webhookEventValues });
+export const auditActorTypeValues = ['user', 'system', 'runner'] as const;
+export const auditActorTypeEnum = (name: string) => text(name, { enum: auditActorTypeValues });
 
 // ---------------------------------------------------------------------------
 // Namensraum
@@ -91,14 +73,14 @@ export const auditActorTypeEnum = pgEnum('audit_actor_type', ['user', 'system', 
  * `nameLower` trägt den UNIQUE-Index, damit Groß-/Kleinschreibung nicht zu
  * zwei verschiedenen Besitzern mit faktisch gleichem Namen führen kann.
  */
-export const namespaces = pgTable(
+export const namespaces = sqliteTable(
   'namespaces',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    name: varchar('name', { length: 39 }).notNull(),
-    nameLower: varchar('name_lower', { length: 39 }).notNull(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    name: text('name', { length: 39 }).notNull(),
+    nameLower: text('name_lower', { length: 39 }).notNull(),
     kind: namespaceKindEnum('kind').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('namespaces_name_lower_key').on(t.nameLower)],
 );
@@ -107,19 +89,19 @@ export const namespaces = pgTable(
 // Benutzer
 // ---------------------------------------------------------------------------
 
-export const users = pgTable(
+export const users = sqliteTable(
   'users',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    namespaceId: uuid('namespace_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    namespaceId: text('namespace_id')
       .notNull()
       .references(() => namespaces.id, { onDelete: 'restrict' }),
 
-    email: varchar('email', { length: 320 }).notNull(),
-    emailLower: varchar('email_lower', { length: 320 }).notNull(),
-    emailVerified: boolean('email_verified').notNull().default(false),
+    email: text('email', { length: 320 }).notNull(),
+    emailLower: text('email_lower', { length: 320 }).notNull(),
+    emailVerified: integer('email_verified', { mode: 'boolean' }).notNull().default(false),
     /** Steuert, ob die E-Mail auf dem öffentlichen Profil erscheint. */
-    emailPublic: boolean('email_public').notNull().default(false),
+    emailPublic: integer('email_public', { mode: 'boolean' }).notNull().default(false),
 
     /** Argon2id-Hash. Enthält Salt und Parameter; keine separate Salt-Spalte nötig. */
     passwordHash: text('password_hash').notNull(),
@@ -130,29 +112,29 @@ export const users = pgTable(
      */
     credentialVersion: integer('credential_version').notNull().default(1),
 
-    displayName: varchar('display_name', { length: 100 }),
-    bio: varchar('bio', { length: 500 }),
-    company: varchar('company', { length: 100 }),
-    location: varchar('location', { length: 100 }),
-    websiteUrl: varchar('website_url', { length: 500 }),
-    socialLinks: jsonb('social_links').$type<{ label: string; url: string }[]>().notNull().default(sql`'[]'::jsonb`),
-    avatarPath: varchar('avatar_path', { length: 400 }),
+    displayName: text('display_name', { length: 100 }),
+    bio: text('bio', { length: 500 }),
+    company: text('company', { length: 100 }),
+    location: text('location', { length: 100 }),
+    websiteUrl: text('website_url', { length: 500 }),
+    socialLinks: text('social_links', { mode: 'json' }).$type<{ label: string; url: string }[]>().notNull().default(sql`'[]'`),
+    avatarPath: text('avatar_path', { length: 400 }),
 
-    isAdmin: boolean('is_admin').notNull().default(false),
-    isActive: boolean('is_active').notNull().default(true),
+    isAdmin: integer('is_admin', { mode: 'boolean' }).notNull().default(false),
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     /** Gesetzt, wenn ein Administrator den Account gesperrt hat. */
-    suspendedAt: timestamp('suspended_at', { withTimezone: true }),
-    suspendedReason: varchar('suspended_reason', { length: 500 }),
+    suspendedAt: integer('suspended_at', { mode: 'timestamp_ms' }),
+    suspendedReason: text('suspended_reason', { length: 500 }),
 
-    twoFactorEnabled: boolean('two_factor_enabled').notNull().default(false),
+    twoFactorEnabled: integer('two_factor_enabled', { mode: 'boolean' }).notNull().default(false),
     /** TOTP-Seed, AES-256-GCM-verschlüsselt mit ENCRYPTION_KEY. Niemals im Klartext. */
     twoFactorSecretEnc: text('two_factor_secret_enc'),
     /** Argon2-Hashes der Wiederherstellungscodes. */
-    twoFactorRecoveryHashes: jsonb('two_factor_recovery_hashes').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    twoFactorRecoveryHashes: text('two_factor_recovery_hashes', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
 
-    lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    lastLoginAt: integer('last_login_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('users_namespace_key').on(t.namespaceId),
@@ -160,25 +142,25 @@ export const users = pgTable(
   ],
 );
 
-export const sessions = pgTable(
+export const sessions = sqliteTable(
   'sessions',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     /**
      * SHA-256 des Session-Tokens. Das Token selbst wird nie gespeichert – ein
      * Datenbankleck erlaubt dadurch keine Session-Übernahme.
      */
-    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    tokenHash: text('token_hash', { length: 64 }).notNull(),
     credentialVersion: integer('credential_version').notNull(),
-    userAgent: varchar('user_agent', { length: 400 }),
-    ipAddress: varchar('ip_address', { length: 45 }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    userAgent: text('user_agent', { length: 400 }),
+    ipAddress: text('ip_address', { length: 45 }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
   },
   (t) => [
     uniqueIndex('sessions_token_hash_key').on(t.tokenHash),
@@ -188,20 +170,20 @@ export const sessions = pgTable(
 );
 
 /** Kurzlebige Tokens für E-Mail-Verifizierung und Passwort-Reset. */
-export const verificationTokens = pgTable(
+export const verificationTokens = sqliteTable(
   'verification_tokens',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    purpose: varchar('purpose', { length: 32 }).notNull(),
-    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    purpose: text('purpose', { length: 32 }).notNull(),
+    tokenHash: text('token_hash', { length: 64 }).notNull(),
     /** Bei E-Mail-Wechsel die neue Adresse, die nach Bestätigung übernommen wird. */
-    payload: varchar('payload', { length: 320 }),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    consumedAt: timestamp('consumed_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    payload: text('payload', { length: 320 }),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    consumedAt: integer('consumed_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('verification_tokens_hash_key').on(t.tokenHash),
@@ -210,87 +192,87 @@ export const verificationTokens = pgTable(
 );
 
 /** Persönliche Zugriffstokens für API und Git über HTTPS. */
-export const apiTokens = pgTable(
+export const apiTokens = sqliteTable(
   'api_tokens',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 100 }).notNull(),
-    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    name: text('name', { length: 100 }).notNull(),
+    tokenHash: text('token_hash', { length: 64 }).notNull(),
     /** Die ersten Zeichen des Tokens, damit Benutzer es in der Liste wiedererkennen. */
-    tokenPrefix: varchar('token_prefix', { length: 16 }).notNull(),
-    scopes: jsonb('scopes').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
-    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
-    expiresAt: timestamp('expires_at', { withTimezone: true }),
-    revokedAt: timestamp('revoked_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    tokenPrefix: text('token_prefix', { length: 16 }).notNull(),
+    scopes: text('scopes', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+    revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('api_tokens_hash_key').on(t.tokenHash), index('api_tokens_user_idx').on(t.userId)],
 );
 
-export const sshKeys = pgTable(
+export const sshKeys = sqliteTable(
   'ssh_keys',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    title: varchar('title', { length: 100 }).notNull(),
+    title: text('title', { length: 100 }).notNull(),
     /** SHA-256-Fingerprint im OpenSSH-Format, Basis für die Zuordnung beim Login. */
-    fingerprint: varchar('fingerprint', { length: 64 }).notNull(),
+    fingerprint: text('fingerprint', { length: 64 }).notNull(),
     publicKey: text('public_key').notNull(),
-    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: integer('last_used_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('ssh_keys_fingerprint_key').on(t.fingerprint), index('ssh_keys_user_idx').on(t.userId)],
 );
 
-export const userBlocks = pgTable(
+export const userBlocks = sqliteTable(
   'user_blocks',
   {
-    blockerId: uuid('blocker_id')
+    blockerId: text('blocker_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    blockedId: uuid('blocked_id')
+    blockedId: text('blocked_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    reason: varchar('reason', { length: 500 }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    reason: text('reason', { length: 500 }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.blockerId, t.blockedId] }), index('user_blocks_blocked_idx').on(t.blockedId)],
 );
 
-export const follows = pgTable(
+export const follows = sqliteTable(
   'follows',
   {
-    followerId: uuid('follower_id')
+    followerId: text('follower_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    followingId: uuid('following_id')
+    followingId: text('following_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.followerId, t.followingId] }), index('follows_following_idx').on(t.followingId)],
 );
 
-export const abuseReports = pgTable(
+export const abuseReports = sqliteTable(
   'abuse_reports',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    reporterId: uuid('reporter_id').references(() => users.id, { onDelete: 'set null' }),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    reporterId: text('reporter_id').references(() => users.id, { onDelete: 'set null' }),
     /** 'user' | 'repository' | 'issue' | 'comment' */
-    subjectType: varchar('subject_type', { length: 32 }).notNull(),
-    subjectId: uuid('subject_id').notNull(),
-    reason: varchar('reason', { length: 64 }).notNull(),
+    subjectType: text('subject_type', { length: 32 }).notNull(),
+    subjectId: text('subject_id').notNull(),
+    reason: text('reason', { length: 64 }).notNull(),
     details: text('details'),
-    status: varchar('status', { length: 32 }).notNull().default('open'),
-    resolvedById: uuid('resolved_by_id').references(() => users.id, { onDelete: 'set null' }),
-    resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+    status: text('status', { length: 32 }).notNull().default('open'),
+    resolvedById: text('resolved_by_id').references(() => users.id, { onDelete: 'set null' }),
+    resolvedAt: integer('resolved_at', { mode: 'timestamp_ms' }),
     resolutionNote: text('resolution_note'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('abuse_reports_status_idx').on(t.status, t.createdAt), index('abuse_reports_subject_idx').on(t.subjectType, t.subjectId)],
 );
@@ -299,43 +281,43 @@ export const abuseReports = pgTable(
 // Organisationen und Teams
 // ---------------------------------------------------------------------------
 
-export const organizations = pgTable(
+export const organizations = sqliteTable(
   'organizations',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    namespaceId: uuid('namespace_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    namespaceId: text('namespace_id')
       .notNull()
       .references(() => namespaces.id, { onDelete: 'restrict' }),
-    displayName: varchar('display_name', { length: 100 }),
-    description: varchar('description', { length: 500 }),
-    websiteUrl: varchar('website_url', { length: 500 }),
-    location: varchar('location', { length: 100 }),
-    avatarPath: varchar('avatar_path', { length: 400 }),
+    displayName: text('display_name', { length: 100 }),
+    description: text('description', { length: 500 }),
+    websiteUrl: text('website_url', { length: 500 }),
+    location: text('location', { length: 100 }),
+    avatarPath: text('avatar_path', { length: 400 }),
     /**
      * Standard-Sichtbarkeit für neu erstellte Repositories dieser Organisation.
      * Verhindert, dass interner Code versehentlich öffentlich wird.
      */
     defaultRepoVisibility: repoVisibilityEnum('default_repo_visibility').notNull().default('private'),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('organizations_namespace_key').on(t.namespaceId)],
 );
 
-export const organizationMembers = pgTable(
+export const organizationMembers = sqliteTable(
   'organization_members',
   {
-    organizationId: uuid('organization_id')
+    organizationId: text('organization_id')
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     role: orgRoleEnum('role').notNull().default('member'),
     /** Steuert, ob die Mitgliedschaft auf dem öffentlichen Profil sichtbar ist. */
-    isPublic: boolean('is_public').notNull().default(false),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    isPublic: integer('is_public', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     primaryKey({ columns: [t.organizationId, t.userId] }),
@@ -344,24 +326,24 @@ export const organizationMembers = pgTable(
   ],
 );
 
-export const organizationInvitations = pgTable(
+export const organizationInvitations = sqliteTable(
   'organization_invitations',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    organizationId: uuid('organization_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    organizationId: text('organization_id')
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
     /** Gesetzt, wenn ein bestehender Account eingeladen wird. */
-    inviteeId: uuid('invitee_id').references(() => users.id, { onDelete: 'cascade' }),
+    inviteeId: text('invitee_id').references(() => users.id, { onDelete: 'cascade' }),
     /** Gesetzt, wenn per E-Mail eingeladen wird und noch kein Account existiert. */
-    inviteeEmail: varchar('invitee_email', { length: 320 }),
+    inviteeEmail: text('invitee_email', { length: 320 }),
     role: orgRoleEnum('role').notNull().default('member'),
-    invitedById: uuid('invited_by_id').references(() => users.id, { onDelete: 'set null' }),
-    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-    acceptedAt: timestamp('accepted_at', { withTimezone: true }),
-    declinedAt: timestamp('declined_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    invitedById: text('invited_by_id').references(() => users.id, { onDelete: 'set null' }),
+    tokenHash: text('token_hash', { length: 64 }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    acceptedAt: integer('accepted_at', { mode: 'timestamp_ms' }),
+    declinedAt: integer('declined_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('organization_invitations_token_key').on(t.tokenHash),
@@ -369,36 +351,36 @@ export const organizationInvitations = pgTable(
   ],
 );
 
-export const teams = pgTable(
+export const teams = sqliteTable(
   'teams',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    organizationId: uuid('organization_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    organizationId: text('organization_id')
       .notNull()
       .references(() => organizations.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 100 }).notNull(),
-    slug: varchar('slug', { length: 100 }).notNull(),
-    description: varchar('description', { length: 500 }),
+    name: text('name', { length: 100 }).notNull(),
+    slug: text('slug', { length: 100 }).notNull(),
+    description: text('description', { length: 500 }),
     /** Berechtigung, die Mitglieder auf zugeordnete Repositories erhalten. */
     defaultPermission: accessLevelEnum('default_permission').notNull().default('read'),
     /** Spezialteam, das automatisch alle Organisationsmitglieder enthält. */
-    isAllMembers: boolean('is_all_members').notNull().default(false),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    isAllMembers: integer('is_all_members', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('teams_org_slug_key').on(t.organizationId, t.slug)],
 );
 
-export const teamMembers = pgTable(
+export const teamMembers = sqliteTable(
   'team_members',
   {
-    teamId: uuid('team_id')
+    teamId: text('team_id')
       .notNull()
       .references(() => teams.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    isMaintainer: boolean('is_maintainer').notNull().default(false),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    isMaintainer: integer('is_maintainer', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.teamId, t.userId] }), index('team_members_user_idx').on(t.userId)],
 );
@@ -407,45 +389,45 @@ export const teamMembers = pgTable(
 // Repositories
 // ---------------------------------------------------------------------------
 
-export const repositories = pgTable(
+export const repositories = sqliteTable(
   'repositories',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
     /** Besitzer – Benutzer oder Organisation, aufgelöst über den Namensraum. */
-    ownerNamespaceId: uuid('owner_namespace_id')
+    ownerNamespaceId: text('owner_namespace_id')
       .notNull()
       .references(() => namespaces.id, { onDelete: 'restrict' }),
-    name: varchar('name', { length: 100 }).notNull(),
-    nameLower: varchar('name_lower', { length: 100 }).notNull(),
-    description: varchar('description', { length: 500 }),
+    name: text('name', { length: 100 }).notNull(),
+    nameLower: text('name_lower', { length: 100 }).notNull(),
+    description: text('description', { length: 500 }),
     visibility: repoVisibilityEnum('visibility').notNull().default('private'),
 
-    defaultBranch: varchar('default_branch', { length: 255 }).notNull().default('main'),
+    defaultBranch: text('default_branch', { length: 255 }).notNull().default('main'),
     /** True, solange noch kein Commit gepusht wurde. Steuert die Repo-Startseite. */
-    isEmpty: boolean('is_empty').notNull().default(true),
-    isArchived: boolean('is_archived').notNull().default(false),
-    isTemplate: boolean('is_template').notNull().default(false),
-    isMirror: boolean('is_mirror').notNull().default(false),
+    isEmpty: integer('is_empty', { mode: 'boolean' }).notNull().default(true),
+    isArchived: integer('is_archived', { mode: 'boolean' }).notNull().default(false),
+    isTemplate: integer('is_template', { mode: 'boolean' }).notNull().default(false),
+    isMirror: integer('is_mirror', { mode: 'boolean' }).notNull().default(false),
 
-    isFork: boolean('is_fork').notNull().default(false),
-    parentId: uuid('parent_id').references((): any => repositories.id, { onDelete: 'set null' }),
+    isFork: integer('is_fork', { mode: 'boolean' }).notNull().default(false),
+    parentId: text('parent_id').references((): any => repositories.id, { onDelete: 'set null' }),
 
-    websiteUrl: varchar('website_url', { length: 500 }),
-    topics: jsonb('topics').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
-    primaryLanguage: varchar('primary_language', { length: 50 }),
+    websiteUrl: text('website_url', { length: 500 }),
+    topics: text('topics', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    primaryLanguage: text('primary_language', { length: 50 }),
     /** Byte-Anteile je Sprache, aus dem Dateibaum berechnet. */
-    languages: jsonb('languages').$type<Record<string, number>>().notNull().default(sql`'{}'::jsonb`),
+    languages: text('languages', { mode: 'json' }).$type<Record<string, number>>().notNull().default(sql`'{}'`),
 
-    hasIssues: boolean('has_issues').notNull().default(true),
-    hasPullRequests: boolean('has_pull_requests').notNull().default(true),
-    hasWiki: boolean('has_wiki').notNull().default(true),
-    hasActions: boolean('has_actions').notNull().default(true),
-    hasReleases: boolean('has_releases').notNull().default(true),
+    hasIssues: integer('has_issues', { mode: 'boolean' }).notNull().default(true),
+    hasPullRequests: integer('has_pull_requests', { mode: 'boolean' }).notNull().default(true),
+    hasWiki: integer('has_wiki', { mode: 'boolean' }).notNull().default(true),
+    hasActions: integer('has_actions', { mode: 'boolean' }).notNull().default(true),
+    hasReleases: integer('has_releases', { mode: 'boolean' }).notNull().default(true),
 
-    allowMergeCommit: boolean('allow_merge_commit').notNull().default(true),
-    allowSquashMerge: boolean('allow_squash_merge').notNull().default(true),
-    allowRebaseMerge: boolean('allow_rebase_merge').notNull().default(true),
-    deleteBranchOnMerge: boolean('delete_branch_on_merge').notNull().default(false),
+    allowMergeCommit: integer('allow_merge_commit', { mode: 'boolean' }).notNull().default(true),
+    allowSquashMerge: integer('allow_squash_merge', { mode: 'boolean' }).notNull().default(true),
+    allowRebaseMerge: integer('allow_rebase_merge', { mode: 'boolean' }).notNull().default(true),
+    deleteBranchOnMerge: integer('delete_branch_on_merge', { mode: 'boolean' }).notNull().default(false),
 
     /**
      * Zähler werden denormalisiert gehalten, weil sie auf Listenseiten für jedes
@@ -460,13 +442,13 @@ export const repositories = pgTable(
     /** Laufende Nummer für den gemeinsamen Issue-/PR-Nummernkreis. */
     issueCounter: integer('issue_counter').notNull().default(0),
 
-    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
+    sizeBytes: integer('size_bytes').notNull().default(0),
 
-    pushedAt: timestamp('pushed_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    pushedAt: integer('pushed_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
     /** Soft Delete: erlaubt Wiederherstellung und verhindert Namens-Recycling-Angriffe. */
-    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
   },
   (t) => [
     uniqueIndex('repositories_owner_name_key').on(t.ownerNamespaceId, t.nameLower),
@@ -477,17 +459,17 @@ export const repositories = pgTable(
 );
 
 /** Direkt auf einen Benutzer vergebene Repository-Rechte (ohne Team-Umweg). */
-export const repositoryCollaborators = pgTable(
+export const repositoryCollaborators = sqliteTable(
   'repository_collaborators',
   {
-    repositoryId: uuid('repository_id')
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     permission: accessLevelEnum('permission').notNull().default('read'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     primaryKey({ columns: [t.repositoryId, t.userId] }),
@@ -496,17 +478,17 @@ export const repositoryCollaborators = pgTable(
 );
 
 /** Repository-Zugriff für ein Team einer Organisation. */
-export const teamRepositories = pgTable(
+export const teamRepositories = sqliteTable(
   'team_repositories',
   {
-    teamId: uuid('team_id')
+    teamId: text('team_id')
       .notNull()
       .references(() => teams.id, { onDelete: 'cascade' }),
-    repositoryId: uuid('repository_id')
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
     permission: accessLevelEnum('permission').notNull().default('read'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     primaryKey({ columns: [t.teamId, t.repositoryId] }),
@@ -514,55 +496,55 @@ export const teamRepositories = pgTable(
   ],
 );
 
-export const branchProtections = pgTable(
+export const branchProtections = sqliteTable(
   'branch_protections',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
     /** Glob-Muster, z. B. "main" oder "release/*". */
-    pattern: varchar('pattern', { length: 255 }).notNull(),
-    requirePullRequest: boolean('require_pull_request').notNull().default(true),
-    requiredApprovals: smallint('required_approvals').notNull().default(1),
-    dismissStaleReviews: boolean('dismiss_stale_reviews').notNull().default(false),
-    requireStatusChecks: boolean('require_status_checks').notNull().default(false),
-    requiredStatusChecks: jsonb('required_status_checks').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
-    requireLinearHistory: boolean('require_linear_history').notNull().default(false),
+    pattern: text('pattern', { length: 255 }).notNull(),
+    requirePullRequest: integer('require_pull_request', { mode: 'boolean' }).notNull().default(true),
+    requiredApprovals: integer('required_approvals').notNull().default(1),
+    dismissStaleReviews: integer('dismiss_stale_reviews', { mode: 'boolean' }).notNull().default(false),
+    requireStatusChecks: integer('require_status_checks', { mode: 'boolean' }).notNull().default(false),
+    requiredStatusChecks: text('required_status_checks', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    requireLinearHistory: integer('require_linear_history', { mode: 'boolean' }).notNull().default(false),
     /** Verbietet force-push auf passende Branches. */
-    blockForcePush: boolean('block_force_push').notNull().default(true),
-    blockDeletion: boolean('block_deletion').notNull().default(true),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    blockForcePush: integer('block_force_push', { mode: 'boolean' }).notNull().default(true),
+    blockDeletion: integer('block_deletion', { mode: 'boolean' }).notNull().default(true),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('branch_protections_repo_pattern_key').on(t.repositoryId, t.pattern)],
 );
 
-export const stars = pgTable(
+export const stars = sqliteTable(
   'stars',
   {
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    repositoryId: uuid('repository_id')
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.userId, t.repositoryId] }), index('stars_repo_idx').on(t.repositoryId)],
 );
 
-export const watches = pgTable(
+export const watches = sqliteTable(
   'watches',
   {
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    repositoryId: uuid('repository_id')
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
     /** 'all' | 'participating' | 'ignore' */
-    level: varchar('level', { length: 16 }).notNull().default('all'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    level: text('level', { length: 16 }).notNull().default('all'),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.userId, t.repositoryId] }), index('watches_repo_idx').on(t.repositoryId)],
 );
@@ -571,19 +553,19 @@ export const watches = pgTable(
  * Suchindex für Commits. KEINE Quelle der Wahrheit – wird aus dem Git-Repository
  * befüllt und kann jederzeit verworfen und neu aufgebaut werden.
  */
-export const commitIndex = pgTable(
+export const commitIndex = sqliteTable(
   'commit_index',
   {
-    repositoryId: uuid('repository_id')
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    oid: varchar('oid', { length: 40 }).notNull(),
-    authorName: varchar('author_name', { length: 255 }).notNull(),
-    authorEmail: varchar('author_email', { length: 320 }).notNull(),
+    oid: text('oid', { length: 40 }).notNull(),
+    authorName: text('author_name', { length: 255 }).notNull(),
+    authorEmail: text('author_email', { length: 320 }).notNull(),
     /** Zuordnung zum Plattform-Account über verifizierte E-Mail, sofern möglich. */
-    authorUserId: uuid('author_user_id').references(() => users.id, { onDelete: 'set null' }),
-    committedAt: timestamp('committed_at', { withTimezone: true }).notNull(),
-    subject: varchar('subject', { length: 500 }).notNull(),
+    authorUserId: text('author_user_id').references(() => users.id, { onDelete: 'set null' }),
+    committedAt: integer('committed_at', { mode: 'timestamp_ms' }).notNull(),
+    subject: text('subject', { length: 500 }).notNull(),
     body: text('body'),
     additions: integer('additions').notNull().default(0),
     deletions: integer('deletions').notNull().default(0),
@@ -597,20 +579,20 @@ export const commitIndex = pgTable(
 );
 
 /** Push-Historie, Grundlage für Aktivitäts-Feeds und Audit. */
-export const pushEvents = pgTable(
+export const pushEvents = sqliteTable(
   'push_events',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    pusherId: uuid('pusher_id').references(() => users.id, { onDelete: 'set null' }),
-    refName: varchar('ref_name', { length: 255 }).notNull(),
-    oldOid: varchar('old_oid', { length: 40 }).notNull(),
-    newOid: varchar('new_oid', { length: 40 }).notNull(),
-    isForcePush: boolean('is_force_push').notNull().default(false),
+    pusherId: text('pusher_id').references(() => users.id, { onDelete: 'set null' }),
+    refName: text('ref_name', { length: 255 }).notNull(),
+    oldOid: text('old_oid', { length: 40 }).notNull(),
+    newOid: text('new_oid', { length: 40 }).notNull(),
+    isForcePush: integer('is_force_push', { mode: 'boolean' }).notNull().default(false),
     commitCount: integer('commit_count').notNull().default(0),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('push_events_repo_idx').on(t.repositoryId, t.createdAt)],
 );
@@ -619,62 +601,62 @@ export const pushEvents = pgTable(
 // Issues und Pull Requests
 // ---------------------------------------------------------------------------
 
-export const labels = pgTable(
+export const labels = sqliteTable(
   'labels',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 64 }).notNull(),
+    name: text('name', { length: 64 }).notNull(),
     /** Hex-Farbe ohne führendes #. */
-    color: varchar('color', { length: 6 }).notNull().default('6b7280'),
-    description: varchar('description', { length: 200 }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    color: text('color', { length: 6 }).notNull().default('6b7280'),
+    description: text('description', { length: 200 }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('labels_repo_name_key').on(t.repositoryId, t.name)],
 );
 
-export const milestones = pgTable(
+export const milestones = sqliteTable(
   'milestones',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
     number: integer('number').notNull(),
-    title: varchar('title', { length: 255 }).notNull(),
+    title: text('title', { length: 255 }).notNull(),
     description: text('description'),
-    dueOn: timestamp('due_on', { withTimezone: true }),
+    dueOn: integer('due_on', { mode: 'timestamp_ms' }),
     state: issueStateEnum('state').notNull().default('open'),
-    closedAt: timestamp('closed_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    closedAt: integer('closed_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('milestones_repo_number_key').on(t.repositoryId, t.number)],
 );
 
-export const issues = pgTable(
+export const issues = sqliteTable(
   'issues',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
     /** Pro Repository fortlaufend, gemeinsam für Issues und Pull Requests. */
     number: integer('number').notNull(),
     kind: issueKindEnum('kind').notNull().default('issue'),
-    title: varchar('title', { length: 500 }).notNull(),
+    title: text('title', { length: 500 }).notNull(),
     body: text('body'),
     state: issueStateEnum('state').notNull().default('open'),
     closeReason: issueCloseReasonEnum('close_reason'),
-    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
-    milestoneId: uuid('milestone_id').references(() => milestones.id, { onDelete: 'set null' }),
-    isLocked: boolean('is_locked').notNull().default(false),
+    authorId: text('author_id').references(() => users.id, { onDelete: 'set null' }),
+    milestoneId: text('milestone_id').references(() => milestones.id, { onDelete: 'set null' }),
+    isLocked: integer('is_locked', { mode: 'boolean' }).notNull().default(false),
     commentCount: integer('comment_count').notNull().default(0),
-    closedAt: timestamp('closed_at', { withTimezone: true }),
-    closedById: uuid('closed_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    closedAt: integer('closed_at', { mode: 'timestamp_ms' }),
+    closedById: text('closed_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('issues_repo_number_key').on(t.repositoryId, t.number),
@@ -684,34 +666,34 @@ export const issues = pgTable(
   ],
 );
 
-export const pullRequests = pgTable(
+export const pullRequests = sqliteTable(
   'pull_requests',
   {
     /** 1:1-Erweiterung von `issues`. */
-    issueId: uuid('issue_id')
+    issueId: text('issue_id')
       .primaryKey()
       .references(() => issues.id, { onDelete: 'cascade' }),
 
-    baseRepositoryId: uuid('base_repository_id')
+    baseRepositoryId: text('base_repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    baseBranch: varchar('base_branch', { length: 255 }).notNull(),
-    baseSha: varchar('base_sha', { length: 40 }),
+    baseBranch: text('base_branch', { length: 255 }).notNull(),
+    baseSha: text('base_sha', { length: 40 }),
 
     /** Null, wenn das Fork-Repository nach dem Öffnen gelöscht wurde. */
-    headRepositoryId: uuid('head_repository_id').references(() => repositories.id, { onDelete: 'set null' }),
-    headBranch: varchar('head_branch', { length: 255 }).notNull(),
-    headSha: varchar('head_sha', { length: 40 }),
+    headRepositoryId: text('head_repository_id').references(() => repositories.id, { onDelete: 'set null' }),
+    headBranch: text('head_branch', { length: 255 }).notNull(),
+    headSha: text('head_sha', { length: 40 }),
 
-    isDraft: boolean('is_draft').notNull().default(false),
+    isDraft: integer('is_draft', { mode: 'boolean' }).notNull().default(false),
     mergeableState: mergeableStateEnum('mergeable_state').notNull().default('unknown'),
     /** Commit, in dem der Testmerge berechnet wurde – Cache-Invalidierung. */
-    mergeCheckedSha: varchar('merge_checked_sha', { length: 40 }),
+    mergeCheckedSha: text('merge_checked_sha', { length: 40 }),
 
-    mergedAt: timestamp('merged_at', { withTimezone: true }),
-    mergedById: uuid('merged_by_id').references(() => users.id, { onDelete: 'set null' }),
+    mergedAt: integer('merged_at', { mode: 'timestamp_ms' }),
+    mergedById: text('merged_by_id').references(() => users.id, { onDelete: 'set null' }),
     mergeStrategy: mergeStrategyEnum('merge_strategy'),
-    mergeCommitSha: varchar('merge_commit_sha', { length: 40 }),
+    mergeCommitSha: text('merge_commit_sha', { length: 40 }),
 
     additions: integer('additions').notNull().default(0),
     deletions: integer('deletions').notNull().default(0),
@@ -724,77 +706,77 @@ export const pullRequests = pgTable(
   ],
 );
 
-export const issueLabels = pgTable(
+export const issueLabels = sqliteTable(
   'issue_labels',
   {
-    issueId: uuid('issue_id')
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    labelId: uuid('label_id')
+    labelId: text('label_id')
       .notNull()
       .references(() => labels.id, { onDelete: 'cascade' }),
   },
   (t) => [primaryKey({ columns: [t.issueId, t.labelId] }), index('issue_labels_label_idx').on(t.labelId)],
 );
 
-export const issueAssignees = pgTable(
+export const issueAssignees = sqliteTable(
   'issue_assignees',
   {
-    issueId: uuid('issue_id')
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    assignedAt: timestamp('assigned_at', { withTimezone: true }).notNull().defaultNow(),
+    assignedAt: integer('assigned_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.issueId, t.userId] }), index('issue_assignees_user_idx').on(t.userId)],
 );
 
-export const issueComments = pgTable(
+export const issueComments = sqliteTable(
   'issue_comments',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    issueId: uuid('issue_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+    authorId: text('author_id').references(() => users.id, { onDelete: 'set null' }),
     body: text('body').notNull(),
-    editedAt: timestamp('edited_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    editedAt: integer('edited_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('issue_comments_issue_idx').on(t.issueId, t.createdAt)],
 );
 
 /** Strukturierte Ereignisse im Issue-Verlauf (geschlossen, Label gesetzt, …). */
-export const issueEvents = pgTable(
+export const issueEvents = sqliteTable(
   'issue_events',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    issueId: uuid('issue_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
-    eventType: varchar('event_type', { length: 48 }).notNull(),
-    data: jsonb('data').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    actorId: text('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    eventType: text('event_type', { length: 48 }).notNull(),
+    data: text('data', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('issue_events_issue_idx').on(t.issueId, t.createdAt)],
 );
 
 /** Verknüpfungen zwischen Issues (duplicate_of, blocks, relates_to, closes). */
-export const issueLinks = pgTable(
+export const issueLinks = sqliteTable(
   'issue_links',
   {
-    sourceIssueId: uuid('source_issue_id')
+    sourceIssueId: text('source_issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    targetIssueId: uuid('target_issue_id')
+    targetIssueId: text('target_issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    linkType: varchar('link_type', { length: 32 }).notNull(),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    linkType: text('link_type', { length: 32 }).notNull(),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     primaryKey({ columns: [t.sourceIssueId, t.targetIssueId, t.linkType] }),
@@ -802,38 +784,38 @@ export const issueLinks = pgTable(
   ],
 );
 
-export const pullRequestReviews = pgTable(
+export const pullRequestReviews = sqliteTable(
   'pull_request_reviews',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    issueId: uuid('issue_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    reviewerId: uuid('reviewer_id').references(() => users.id, { onDelete: 'set null' }),
+    reviewerId: text('reviewer_id').references(() => users.id, { onDelete: 'set null' }),
     state: reviewStateEnum('state').notNull().default('pending'),
     body: text('body'),
     /** Commit, auf den sich das Review bezieht – für "stale review"-Erkennung. */
-    commitSha: varchar('commit_sha', { length: 40 }),
-    submittedAt: timestamp('submitted_at', { withTimezone: true }),
-    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
-    dismissedReason: varchar('dismissed_reason', { length: 500 }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    commitSha: text('commit_sha', { length: 40 }),
+    submittedAt: integer('submitted_at', { mode: 'timestamp_ms' }),
+    dismissedAt: integer('dismissed_at', { mode: 'timestamp_ms' }),
+    dismissedReason: text('dismissed_reason', { length: 500 }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('pull_request_reviews_issue_idx').on(t.issueId), index('pull_request_reviews_reviewer_idx').on(t.reviewerId)],
 );
 
-export const reviewRequests = pgTable(
+export const reviewRequests = sqliteTable(
   'review_requests',
   {
-    issueId: uuid('issue_id')
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
     /** Entweder ein einzelner Benutzer … */
-    reviewerId: uuid('reviewer_id').references(() => users.id, { onDelete: 'cascade' }),
+    reviewerId: text('reviewer_id').references(() => users.id, { onDelete: 'cascade' }),
     /** … oder ein ganzes Team. */
-    teamId: uuid('team_id').references(() => teams.id, { onDelete: 'cascade' }),
-    requestedById: uuid('requested_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    teamId: text('team_id').references(() => teams.id, { onDelete: 'cascade' }),
+    requestedById: text('requested_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     index('review_requests_issue_idx').on(t.issueId),
@@ -842,45 +824,45 @@ export const reviewRequests = pgTable(
   ],
 );
 
-export const reviewComments = pgTable(
+export const reviewComments = sqliteTable(
   'review_comments',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    reviewId: uuid('review_id').references(() => pullRequestReviews.id, { onDelete: 'cascade' }),
-    issueId: uuid('issue_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    reviewId: text('review_id').references(() => pullRequestReviews.id, { onDelete: 'cascade' }),
+    issueId: text('issue_id')
       .notNull()
       .references(() => issues.id, { onDelete: 'cascade' }),
-    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+    authorId: text('author_id').references(() => users.id, { onDelete: 'set null' }),
     body: text('body').notNull(),
-    path: varchar('path', { length: 1000 }).notNull(),
+    path: text('path', { length: 1000 }).notNull(),
     /** Zeile in der neuen Fassung; null bei Kommentaren auf gelöschte Zeilen. */
     line: integer('line'),
     startLine: integer('start_line'),
     /** 'left' = alte Fassung, 'right' = neue Fassung. */
-    diffSide: varchar('diff_side', { length: 8 }).notNull().default('right'),
-    commitSha: varchar('commit_sha', { length: 40 }).notNull(),
+    diffSide: text('diff_side', { length: 8 }).notNull().default('right'),
+    commitSha: text('commit_sha', { length: 40 }).notNull(),
     /** Antworten innerhalb eines Threads. */
-    replyToId: uuid('reply_to_id').references((): any => reviewComments.id, { onDelete: 'cascade' }),
-    isResolved: boolean('is_resolved').notNull().default(false),
-    resolvedById: uuid('resolved_by_id').references(() => users.id, { onDelete: 'set null' }),
-    editedAt: timestamp('edited_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    replyToId: text('reply_to_id').references((): any => reviewComments.id, { onDelete: 'cascade' }),
+    isResolved: integer('is_resolved', { mode: 'boolean' }).notNull().default(false),
+    resolvedById: text('resolved_by_id').references(() => users.id, { onDelete: 'set null' }),
+    editedAt: integer('edited_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('review_comments_issue_idx').on(t.issueId), index('review_comments_review_idx').on(t.reviewId)],
 );
 
-export const reactions = pgTable(
+export const reactions = sqliteTable(
   'reactions',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
     /** 'issue' | 'issue_comment' | 'review_comment' | 'release' */
-    subjectType: varchar('subject_type', { length: 32 }).notNull(),
-    subjectId: uuid('subject_id').notNull(),
-    content: varchar('content', { length: 32 }).notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    subjectType: text('subject_type', { length: 32 }).notNull(),
+    subjectId: text('subject_id').notNull(),
+    content: text('content', { length: 32 }).notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('reactions_unique_key').on(t.userId, t.subjectType, t.subjectId, t.content),
@@ -889,21 +871,21 @@ export const reactions = pgTable(
 );
 
 /** Vorlagen für Issues und Pull Requests, aus .forge/ im Repository gelesen. */
-export const issueTemplates = pgTable(
+export const issueTemplates = sqliteTable(
   'issue_templates',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
     kind: issueKindEnum('kind').notNull().default('issue'),
-    name: varchar('name', { length: 100 }).notNull(),
-    about: varchar('about', { length: 300 }),
-    titlePrefix: varchar('title_prefix', { length: 100 }),
+    name: text('name', { length: 100 }).notNull(),
+    about: text('about', { length: 300 }),
+    titlePrefix: text('title_prefix', { length: 100 }),
     body: text('body').notNull(),
-    defaultLabels: jsonb('default_labels').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
-    sourcePath: varchar('source_path', { length: 500 }).notNull(),
-    syncedAt: timestamp('synced_at', { withTimezone: true }).notNull().defaultNow(),
+    defaultLabels: text('default_labels', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    sourcePath: text('source_path', { length: 500 }).notNull(),
+    syncedAt: integer('synced_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('issue_templates_repo_path_key').on(t.repositoryId, t.sourcePath)],
 );
@@ -912,52 +894,52 @@ export const issueTemplates = pgTable(
 // CI/CD: Workflows, Runs, Runner
 // ---------------------------------------------------------------------------
 
-export const workflows = pgTable(
+export const workflows = sqliteTable(
   'workflows',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 255 }).notNull(),
+    name: text('name', { length: 255 }).notNull(),
     /** Pfad innerhalb des Repositories, z. B. .forge/workflows/build.yml */
-    path: varchar('path', { length: 500 }).notNull(),
-    isEnabled: boolean('is_enabled').notNull().default(true),
+    path: text('path', { length: 500 }).notNull(),
+    isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
     /** Letzter Validierungsfehler der YAML-Datei, null wenn gültig. */
     parseError: text('parse_error'),
     /** Cron-Ausdrücke aus dem `schedule`-Trigger, für den Scheduler. */
-    schedules: jsonb('schedules').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    schedules: text('schedules', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('workflows_repo_path_key').on(t.repositoryId, t.path)],
 );
 
-export const workflowRuns = pgTable(
+export const workflowRuns = sqliteTable(
   'workflow_runs',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    workflowId: uuid('workflow_id').references(() => workflows.id, { onDelete: 'set null' }),
+    workflowId: text('workflow_id').references(() => workflows.id, { onDelete: 'set null' }),
     /** Pro Repository fortlaufende Run-Nummer. */
     runNumber: integer('run_number').notNull(),
     /** Zählt hoch bei Wiederholung desselben Runs. */
     runAttempt: integer('run_attempt').notNull().default(1),
     /** 'push' | 'pull_request' | 'workflow_dispatch' | 'schedule' */
-    event: varchar('event', { length: 48 }).notNull(),
+    event: text('event', { length: 48 }).notNull(),
     status: runStatusEnum('status').notNull().default('queued'),
-    headBranch: varchar('head_branch', { length: 255 }),
-    headSha: varchar('head_sha', { length: 40 }).notNull(),
+    headBranch: text('head_branch', { length: 255 }),
+    headSha: text('head_sha', { length: 40 }).notNull(),
     /** Snapshot der Workflow-Definition zum Zeitpunkt des Starts. */
-    definition: jsonb('definition').$type<Record<string, unknown>>().notNull(),
-    triggeredById: uuid('triggered_by_id').references(() => users.id, { onDelete: 'set null' }),
+    definition: text('definition', { mode: 'json' }).$type<Record<string, unknown>>().notNull(),
+    triggeredById: text('triggered_by_id').references(() => users.id, { onDelete: 'set null' }),
     /** Bei pull_request-Trigger der auslösende PR. */
-    issueId: uuid('issue_id').references(() => issues.id, { onDelete: 'set null' }),
-    startedAt: timestamp('started_at', { withTimezone: true }),
-    completedAt: timestamp('completed_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    issueId: text('issue_id').references(() => issues.id, { onDelete: 'set null' }),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('workflow_runs_repo_number_key').on(t.repositoryId, t.runNumber, t.runAttempt),
@@ -966,34 +948,34 @@ export const workflowRuns = pgTable(
   ],
 );
 
-export const workflowJobs = pgTable(
+export const workflowJobs = sqliteTable(
   'workflow_jobs',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    runId: uuid('run_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    runId: text('run_id')
       .notNull()
       .references(() => workflowRuns.id, { onDelete: 'cascade' }),
     /** Schlüssel aus der YAML-Datei (jobs.<key>). */
-    jobKey: varchar('job_key', { length: 255 }).notNull(),
-    name: varchar('name', { length: 255 }).notNull(),
+    jobKey: text('job_key', { length: 255 }).notNull(),
+    name: text('name', { length: 255 }).notNull(),
     status: runStatusEnum('status').notNull().default('queued'),
     /** Labels, die ein Runner erfüllen muss (runs-on). */
-    requiredLabels: jsonb('required_labels').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    requiredLabels: text('required_labels', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
     /** jobKeys, die vorher erfolgreich sein müssen (needs). */
-    dependsOn: jsonb('depends_on').$type<string[]>().notNull().default(sql`'[]'::jsonb`),
+    dependsOn: text('depends_on', { mode: 'json' }).$type<string[]>().notNull().default(sql`'[]'`),
     /** Zugewiesener Runner; null solange der Job in der Warteschlange liegt. */
-    runnerId: uuid('runner_id').references((): any => runners.id, { onDelete: 'set null' }),
+    runnerId: text('runner_id').references((): any => runners.id, { onDelete: 'set null' }),
     /**
      * Wird bei Zuweisung gesetzt und vom Runner per Heartbeat verlängert.
      * Läuft die Lease ab, gilt der Job als verwaist und wird neu eingereiht.
      */
-    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp_ms' }),
     timeoutMinutes: integer('timeout_minutes').notNull().default(60),
     exitCode: integer('exit_code'),
     errorMessage: text('error_message'),
-    startedAt: timestamp('started_at', { withTimezone: true }),
-    completedAt: timestamp('completed_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('workflow_jobs_run_key').on(t.runId, t.jobKey),
@@ -1003,19 +985,19 @@ export const workflowJobs = pgTable(
   ],
 );
 
-export const workflowSteps = pgTable(
+export const workflowSteps = sqliteTable(
   'workflow_steps',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    jobId: uuid('job_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    jobId: text('job_id')
       .notNull()
       .references(() => workflowJobs.id, { onDelete: 'cascade' }),
     stepNumber: integer('step_number').notNull(),
-    name: varchar('name', { length: 255 }).notNull(),
+    name: text('name', { length: 255 }).notNull(),
     status: runStatusEnum('status').notNull().default('queued'),
     exitCode: integer('exit_code'),
-    startedAt: timestamp('started_at', { withTimezone: true }),
-    completedAt: timestamp('completed_at', { withTimezone: true }),
+    startedAt: integer('started_at', { mode: 'timestamp_ms' }),
+    completedAt: integer('completed_at', { mode: 'timestamp_ms' }),
   },
   (t) => [uniqueIndex('workflow_steps_job_number_key').on(t.jobId, t.stepNumber)],
 );
@@ -1024,62 +1006,62 @@ export const workflowSteps = pgTable(
  * Log-Zeilen werden blockweise gespeichert statt einzeln, um die Zeilenanzahl
  * beherrschbar zu halten. Ein Block fasst die Ausgabe eines Zeitfensters.
  */
-export const workflowLogChunks = pgTable(
+export const workflowLogChunks = sqliteTable(
   'workflow_log_chunks',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    jobId: uuid('job_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    jobId: text('job_id')
       .notNull()
       .references(() => workflowJobs.id, { onDelete: 'cascade' }),
     stepNumber: integer('step_number'),
     /** Fortlaufend je Job, stellt die Reihenfolge sicher. */
     sequence: integer('sequence').notNull(),
     content: text('content').notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('workflow_log_chunks_job_seq_key').on(t.jobId, t.sequence)],
 );
 
-export const workflowArtifacts = pgTable(
+export const workflowArtifacts = sqliteTable(
   'workflow_artifacts',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    runId: uuid('run_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    runId: text('run_id')
       .notNull()
       .references(() => workflowRuns.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 255 }).notNull(),
+    name: text('name', { length: 255 }).notNull(),
     /** Pfad im Objektspeicher. Nie direkt an den Client ausgeliefert. */
-    storageKey: varchar('storage_key', { length: 500 }).notNull(),
-    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
-    contentType: varchar('content_type', { length: 128 }),
-    sha256: varchar('sha256', { length: 64 }),
-    expiresAt: timestamp('expires_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    storageKey: text('storage_key', { length: 500 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull().default(0),
+    contentType: text('content_type', { length: 128 }),
+    sha256: text('sha256', { length: 64 }),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('workflow_artifacts_run_name_key').on(t.runId, t.name)],
 );
 
-export const runners = pgTable(
+export const runners = sqliteTable(
   'runners',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    name: varchar('name', { length: 255 }).notNull(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    name: text('name', { length: 255 }).notNull(),
     /**
      * Geltungsbereich. Ist beides null, handelt es sich um einen
      * plattformweiten Runner, den nur Administratoren registrieren dürfen.
      */
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
-    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
     /** SHA-256 des Registrierungstokens. */
-    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
-    labels: jsonb('labels').$type<string[]>().notNull().default(sql`'["self-hosted"]'::jsonb`),
+    tokenHash: text('token_hash', { length: 64 }).notNull(),
+    labels: text('labels', { mode: 'json' }).$type<string[]>().notNull().default(sql`'["self-hosted"]'`),
     status: runnerStatusEnum('status').notNull().default('offline'),
-    osName: varchar('os_name', { length: 64 }),
-    architecture: varchar('architecture', { length: 32 }),
-    version: varchar('version', { length: 32 }),
-    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    osName: text('os_name', { length: 64 }),
+    architecture: text('architecture', { length: 32 }),
+    version: text('version', { length: 32 }),
+    lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('runners_token_key').on(t.tokenHash),
@@ -1093,19 +1075,19 @@ export const runners = pgTable(
  * ausschließlich an den Runner übergeben, der den zugehörigen Job ausführt –
  * nie über die API an das Frontend.
  */
-export const secrets = pgTable(
+export const secrets = sqliteTable(
   'secrets',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
-    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
     /** Optionale Umgebung (production, staging …). */
-    environment: varchar('environment', { length: 64 }),
-    name: varchar('name', { length: 128 }).notNull(),
+    environment: text('environment', { length: 64 }),
+    name: text('name', { length: 128 }).notNull(),
     valueEnc: text('value_enc').notNull(),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('secrets_repo_env_name_key').on(t.repositoryId, t.environment, t.name),
@@ -1114,17 +1096,17 @@ export const secrets = pgTable(
 );
 
 /** Nicht-geheime Umgebungsvariablen. Im Gegensatz zu Secrets lesbar. */
-export const variables = pgTable(
+export const variables = sqliteTable(
   'variables',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
-    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
-    environment: varchar('environment', { length: 64 }),
-    name: varchar('name', { length: 128 }).notNull(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
+    environment: text('environment', { length: 64 }),
+    name: text('name', { length: 128 }).notNull(),
     value: text('value').notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('variables_repo_env_name_key').on(t.repositoryId, t.environment, t.name),
@@ -1136,23 +1118,23 @@ export const variables = pgTable(
 // Releases und Packages
 // ---------------------------------------------------------------------------
 
-export const releases = pgTable(
+export const releases = sqliteTable(
   'releases',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
-    tagName: varchar('tag_name', { length: 255 }).notNull(),
+    tagName: text('tag_name', { length: 255 }).notNull(),
     /** Branch oder Commit, auf dem das Tag erzeugt wurde. */
-    targetCommitish: varchar('target_commitish', { length: 255 }),
-    name: varchar('name', { length: 255 }),
+    targetCommitish: text('target_commitish', { length: 255 }),
+    name: text('name', { length: 255 }),
     body: text('body'),
-    isDraft: boolean('is_draft').notNull().default(false),
-    isPrerelease: boolean('is_prerelease').notNull().default(false),
-    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
-    publishedAt: timestamp('published_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    isDraft: integer('is_draft', { mode: 'boolean' }).notNull().default(false),
+    isPrerelease: integer('is_prerelease', { mode: 'boolean' }).notNull().default(false),
+    authorId: text('author_id').references(() => users.id, { onDelete: 'set null' }),
+    publishedAt: integer('published_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('releases_repo_tag_key').on(t.repositoryId, t.tagName),
@@ -1160,22 +1142,22 @@ export const releases = pgTable(
   ],
 );
 
-export const releaseAssets = pgTable(
+export const releaseAssets = sqliteTable(
   'release_assets',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    releaseId: uuid('release_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    releaseId: text('release_id')
       .notNull()
       .references(() => releases.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 255 }).notNull(),
-    label: varchar('label', { length: 255 }),
-    storageKey: varchar('storage_key', { length: 500 }).notNull(),
-    contentType: varchar('content_type', { length: 128 }),
-    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
-    sha256: varchar('sha256', { length: 64 }),
+    name: text('name', { length: 255 }).notNull(),
+    label: text('label', { length: 255 }),
+    storageKey: text('storage_key', { length: 500 }).notNull(),
+    contentType: text('content_type', { length: 128 }),
+    sizeBytes: integer('size_bytes').notNull().default(0),
+    sha256: text('sha256', { length: 64 }),
     downloadCount: integer('download_count').notNull().default(0),
-    uploadedById: uuid('uploaded_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    uploadedById: text('uploaded_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('release_assets_release_name_key').on(t.releaseId, t.name)],
 );
@@ -1185,39 +1167,39 @@ export const releaseAssets = pgTable(
  * npm, docker, maven usw., `metadata` nimmt formatspezifische Felder auf.
  * Dadurch lassen sich weitere Registries ergänzen, ohne das Schema zu ändern.
  */
-export const packages = pgTable(
+export const packages = sqliteTable(
   'packages',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    ownerNamespaceId: uuid('owner_namespace_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    ownerNamespaceId: text('owner_namespace_id')
       .notNull()
       .references(() => namespaces.id, { onDelete: 'cascade' }),
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'set null' }),
-    format: varchar('format', { length: 32 }).notNull(),
-    name: varchar('name', { length: 255 }).notNull(),
-    description: varchar('description', { length: 500 }),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'set null' }),
+    format: text('format', { length: 32 }).notNull(),
+    name: text('name', { length: 255 }).notNull(),
+    description: text('description', { length: 500 }),
     visibility: repoVisibilityEnum('visibility').notNull().default('private'),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('packages_owner_format_name_key').on(t.ownerNamespaceId, t.format, t.name)],
 );
 
-export const packageVersions = pgTable(
+export const packageVersions = sqliteTable(
   'package_versions',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    packageId: uuid('package_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    packageId: text('package_id')
       .notNull()
       .references(() => packages.id, { onDelete: 'cascade' }),
-    version: varchar('version', { length: 128 }).notNull(),
-    storageKey: varchar('storage_key', { length: 500 }).notNull(),
-    sizeBytes: bigint('size_bytes', { mode: 'number' }).notNull().default(0),
-    sha256: varchar('sha256', { length: 64 }),
-    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    version: text('version', { length: 128 }).notNull(),
+    storageKey: text('storage_key', { length: 500 }).notNull(),
+    sizeBytes: integer('size_bytes').notNull().default(0),
+    sha256: text('sha256', { length: 64 }),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
     downloadCount: integer('download_count').notNull().default(0),
-    publishedById: uuid('published_by_id').references(() => users.id, { onDelete: 'set null' }),
-    yankedAt: timestamp('yanked_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    publishedById: text('published_by_id').references(() => users.id, { onDelete: 'set null' }),
+    yankedAt: integer('yanked_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [uniqueIndex('package_versions_pkg_version_key').on(t.packageId, t.version)],
 );
@@ -1226,24 +1208,24 @@ export const packageVersions = pgTable(
 // Benachrichtigungen, Webhooks, Audit
 // ---------------------------------------------------------------------------
 
-export const notifications = pgTable(
+export const notifications = sqliteTable(
   'notifications',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    userId: uuid('user_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
     /** 'issue' | 'pull_request' | 'workflow_run' | 'release' */
-    subjectType: varchar('subject_type', { length: 32 }).notNull(),
-    subjectId: uuid('subject_id').notNull(),
+    subjectType: text('subject_type', { length: 32 }).notNull(),
+    subjectId: text('subject_id').notNull(),
     reason: notificationReasonEnum('reason').notNull(),
-    title: varchar('title', { length: 500 }).notNull(),
+    title: text('title', { length: 500 }).notNull(),
     /** Relative URL innerhalb der Anwendung. */
-    targetPath: varchar('target_path', { length: 1000 }).notNull(),
-    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
-    readAt: timestamp('read_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    targetPath: text('target_path', { length: 1000 }).notNull(),
+    actorId: text('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    readAt: integer('read_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     index('notifications_user_unread_idx').on(t.userId, t.readAt, t.createdAt),
@@ -1251,78 +1233,78 @@ export const notifications = pgTable(
   ],
 );
 
-export const notificationSettings = pgTable(
+export const notificationSettings = sqliteTable(
   'notification_settings',
   {
-    userId: uuid('user_id')
+    userId: text('user_id')
       .primaryKey()
       .references(() => users.id, { onDelete: 'cascade' }),
-    emailOnMention: boolean('email_on_mention').notNull().default(true),
-    emailOnReviewRequest: boolean('email_on_review_request').notNull().default(true),
-    emailOnAssign: boolean('email_on_assign').notNull().default(true),
-    emailOnWorkflowFailure: boolean('email_on_workflow_failure').notNull().default(true),
+    emailOnMention: integer('email_on_mention', { mode: 'boolean' }).notNull().default(true),
+    emailOnReviewRequest: integer('email_on_review_request', { mode: 'boolean' }).notNull().default(true),
+    emailOnAssign: integer('email_on_assign', { mode: 'boolean' }).notNull().default(true),
+    emailOnWorkflowFailure: integer('email_on_workflow_failure', { mode: 'boolean' }).notNull().default(true),
     /** Automatisch Repositories beobachten, zu denen man Schreibrechte erhält. */
-    autoWatchOnAccess: boolean('auto_watch_on_access').notNull().default(true),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    autoWatchOnAccess: integer('auto_watch_on_access', { mode: 'boolean' }).notNull().default(true),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
 );
 
-export const webhooks = pgTable(
+export const webhooks = sqliteTable(
   'webhooks',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
-    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
-    url: varchar('url', { length: 1000 }).notNull(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').references(() => organizations.id, { onDelete: 'cascade' }),
+    url: text('url', { length: 1000 }).notNull(),
     /** HMAC-SHA256-Schlüssel, verschlüsselt gespeichert. */
     secretEnc: text('secret_enc'),
-    contentType: varchar('content_type', { length: 64 }).notNull().default('application/json'),
-    events: jsonb('events').$type<string[]>().notNull().default(sql`'["push"]'::jsonb`),
-    isActive: boolean('is_active').notNull().default(true),
+    contentType: text('content_type', { length: 64 }).notNull().default('application/json'),
+    events: text('events', { mode: 'json' }).$type<string[]>().notNull().default(sql`'["push"]'`),
+    isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     /** Anzahl aufeinanderfolgender Fehlzustellungen; deaktiviert den Hook ab einem Grenzwert. */
     consecutiveFailures: integer('consecutive_failures').notNull().default(0),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('webhooks_repo_idx').on(t.repositoryId), index('webhooks_org_idx').on(t.organizationId)],
 );
 
-export const webhookDeliveries = pgTable(
+export const webhookDeliveries = sqliteTable(
   'webhook_deliveries',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    webhookId: uuid('webhook_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    webhookId: text('webhook_id')
       .notNull()
       .references(() => webhooks.id, { onDelete: 'cascade' }),
-    event: varchar('event', { length: 48 }).notNull(),
+    event: text('event', { length: 48 }).notNull(),
     requestBody: text('request_body').notNull(),
     responseStatus: integer('response_status'),
     responseBody: text('response_body'),
     durationMs: integer('duration_ms'),
     error: text('error'),
     attempt: integer('attempt').notNull().default(1),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('webhook_deliveries_hook_idx').on(t.webhookId, t.createdAt)],
 );
 
-export const auditLogs = pgTable(
+export const auditLogs = sqliteTable(
   'audit_logs',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
     actorType: auditActorTypeEnum('actor_type').notNull().default('user'),
-    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    actorId: text('actor_id').references(() => users.id, { onDelete: 'set null' }),
     /** Maschinenlesbare Aktion, z. B. "repository.visibility_changed". */
-    action: varchar('action', { length: 64 }).notNull(),
+    action: text('action', { length: 64 }).notNull(),
     /** Betroffenes Objekt. */
-    targetType: varchar('target_type', { length: 32 }),
-    targetId: uuid('target_id'),
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'set null' }),
-    organizationId: uuid('organization_id').references(() => organizations.id, { onDelete: 'set null' }),
-    ipAddress: varchar('ip_address', { length: 45 }),
-    userAgent: varchar('user_agent', { length: 400 }),
-    metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    targetType: text('target_type', { length: 32 }),
+    targetId: text('target_id'),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'set null' }),
+    organizationId: text('organization_id').references(() => organizations.id, { onDelete: 'set null' }),
+    ipAddress: text('ip_address', { length: 45 }),
+    userAgent: text('user_agent', { length: 400 }),
+    metadata: text('metadata', { mode: 'json' }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     index('audit_logs_actor_idx').on(t.actorId, t.createdAt),
@@ -1332,11 +1314,11 @@ export const auditLogs = pgTable(
 );
 
 /** Plattformweite Einstellungen als Key-Value, vom Admin-Panel verwaltet. */
-export const platformSettings = pgTable('platform_settings', {
-  key: varchar('key', { length: 64 }).primaryKey(),
-  value: jsonb('value').$type<unknown>().notNull(),
-  updatedById: uuid('updated_by_id').references(() => users.id, { onDelete: 'set null' }),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+export const platformSettings = sqliteTable('platform_settings', {
+  key: text('key', { length: 64 }).primaryKey(),
+  value: text('value', { mode: 'json' }).$type<unknown>().notNull(),
+  updatedById: text('updated_by_id').references(() => users.id, { onDelete: 'set null' }),
+  updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
 });
 
 // ---------------------------------------------------------------------------
@@ -1513,28 +1495,28 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
  * <storage>/gists/<aa>/<bb>/<uuid>.git –, damit auch Schnipsel eine echte
  * Historie haben und sich klonen lassen.
  */
-export const gists = pgTable(
+export const gists = sqliteTable(
   'gists',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    ownerId: uuid('owner_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    ownerId: text('owner_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    description: varchar('description', { length: 500 }),
+    description: text('description', { length: 500 }),
     /**
      * Gists kennen nur zwei Stufen: öffentlich oder nicht gelistet.
      * "Nicht gelistet" bedeutet: nicht in Listen, aber über die ID erreichbar –
      * deshalb heißt es nicht "privat", was eine Zugriffsprüfung verspräche,
      * die es hier nicht gibt.
      */
-    isPublic: boolean('is_public').notNull().default(false),
+    isPublic: integer('is_public', { mode: 'boolean' }).notNull().default(false),
     /** Vorschau der ersten Datei, damit Listen ohne Git-Zugriff auskommen. */
-    primaryFilename: varchar('primary_filename', { length: 255 }),
-    primaryLanguage: varchar('primary_language', { length: 50 }),
+    primaryFilename: text('primary_filename', { length: 255 }),
+    primaryLanguage: text('primary_language', { length: 50 }),
     fileCount: integer('file_count').notNull().default(0),
-    forkOfId: uuid('fork_of_id').references((): any => gists.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    forkOfId: text('fork_of_id').references((): any => gists.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     index('gists_owner_idx').on(t.ownerId, t.createdAt),
@@ -1542,31 +1524,31 @@ export const gists = pgTable(
   ],
 );
 
-export const gistComments = pgTable(
+export const gistComments = sqliteTable(
   'gist_comments',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    gistId: uuid('gist_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    gistId: text('gist_id')
       .notNull()
       .references(() => gists.id, { onDelete: 'cascade' }),
-    authorId: uuid('author_id').references(() => users.id, { onDelete: 'set null' }),
+    authorId: text('author_id').references(() => users.id, { onDelete: 'set null' }),
     body: text('body').notNull(),
-    editedAt: timestamp('edited_at', { withTimezone: true }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    editedAt: integer('edited_at', { mode: 'timestamp_ms' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('gist_comments_gist_idx').on(t.gistId, t.createdAt)],
 );
 
-export const gistStars = pgTable(
+export const gistStars = sqliteTable(
   'gist_stars',
   {
-    userId: uuid('user_id')
+    userId: text('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    gistId: uuid('gist_id')
+    gistId: text('gist_id')
       .notNull()
       .references(() => gists.id, { onDelete: 'cascade' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [primaryKey({ columns: [t.userId, t.gistId] }), index('gist_stars_gist_idx').on(t.gistId)],
 );
@@ -1575,22 +1557,22 @@ export const gistStars = pgTable(
 // Projektboards
 // ---------------------------------------------------------------------------
 
-export const projectBoards = pgTable(
+export const projectBoards = sqliteTable(
   'project_boards',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
     /** Ein Board gehört entweder zu einem Repository oder zu einer Organisation. */
-    repositoryId: uuid('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
-    organizationId: uuid('organization_id').references(() => organizations.id, {
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'cascade' }),
+    organizationId: text('organization_id').references(() => organizations.id, {
       onDelete: 'cascade',
     }),
     number: integer('number').notNull(),
-    name: varchar('name', { length: 200 }).notNull(),
-    description: varchar('description', { length: 1000 }),
-    isClosed: boolean('is_closed').notNull().default(false),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    name: text('name', { length: 200 }).notNull(),
+    description: text('description', { length: 1000 }),
+    isClosed: integer('is_closed', { mode: 'boolean' }).notNull().default(false),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     uniqueIndex('project_boards_repo_number_key').on(t.repositoryId, t.number),
@@ -1598,14 +1580,14 @@ export const projectBoards = pgTable(
   ],
 );
 
-export const projectColumns = pgTable(
+export const projectColumns = sqliteTable(
   'project_columns',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    boardId: uuid('board_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    boardId: text('board_id')
       .notNull()
       .references(() => projectBoards.id, { onDelete: 'cascade' }),
-    name: varchar('name', { length: 100 }).notNull(),
+    name: text('name', { length: 100 }).notNull(),
     /**
      * Sortierung als Fließkommazahl: eine Karte lässt sich zwischen zwei
      * bestehende einfügen, indem der Mittelwert genommen wird – ohne alle
@@ -1613,26 +1595,26 @@ export const projectColumns = pgTable(
      */
     position: integer('position').notNull().default(0),
     /** Optional: Karten hier landen automatisch bei geschlossenen Issues. */
-    isDoneColumn: boolean('is_done_column').notNull().default(false),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    isDoneColumn: integer('is_done_column', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [index('project_columns_board_idx').on(t.boardId, t.position)],
 );
 
-export const projectCards = pgTable(
+export const projectCards = sqliteTable(
   'project_cards',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    columnId: uuid('column_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    columnId: text('column_id')
       .notNull()
       .references(() => projectColumns.id, { onDelete: 'cascade' }),
     /** Entweder eine Notiz … */
     note: text('note'),
     /** … oder ein verknüpftes Issue bzw. ein Pull Request. */
-    issueId: uuid('issue_id').references(() => issues.id, { onDelete: 'cascade' }),
+    issueId: text('issue_id').references(() => issues.id, { onDelete: 'cascade' }),
     position: integer('position').notNull().default(0),
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     index('project_cards_column_idx').on(t.columnId, t.position),
@@ -1672,8 +1654,10 @@ export const projectCardsRelations = relations(projectCards, ({ one }) => ({
 // Spiegelung auf fremde Git-Hoster
 // ---------------------------------------------------------------------------
 
-export const mirrorDirectionEnum = pgEnum('mirror_direction', ['push', 'pull']);
-export const mirrorStatusEnum = pgEnum('mirror_status', ['idle', 'running', 'success', 'failure']);
+export const mirrorDirectionValues = ['push', 'pull'] as const;
+export const mirrorDirectionEnum = (name: string) => text(name, { enum: mirrorDirectionValues });
+export const mirrorStatusValues = ['idle', 'running', 'success', 'failure'] as const;
+export const mirrorStatusEnum = (name: string) => text(name, { enum: mirrorStatusValues });
 
 /**
  * Spiegelung eines Repositories auf einen anderen Git-Hoster.
@@ -1691,42 +1675,42 @@ export const mirrorStatusEnum = pgEnum('mirror_status', ['idle', 'running', 'suc
  * eine Spiegelung nicht auflösen kann. Die Oberfläche lässt deshalb je
  * Repository nur eine Richtung zu.
  */
-export const repositoryMirrors = pgTable(
+export const repositoryMirrors = sqliteTable(
   'repository_mirrors',
   {
-    id: uuid('id').primaryKey().defaultRandom(),
-    repositoryId: uuid('repository_id')
+    id: text('id').primaryKey().$defaultFn(() => randomUUID()),
+    repositoryId: text('repository_id')
       .notNull()
       .references(() => repositories.id, { onDelete: 'cascade' }),
 
     direction: mirrorDirectionEnum('direction').notNull(),
     /** Adresse des Gegenstücks, immer https. Ohne Zugangsdaten. */
-    remoteUrl: varchar('remote_url', { length: 1000 }).notNull(),
+    remoteUrl: text('remote_url', { length: 1000 }).notNull(),
     /** Benutzername für die Anmeldung; bei GitHub beliebig, wenn ein Token dient. */
-    remoteUsername: varchar('remote_username', { length: 200 }),
+    remoteUsername: text('remote_username', { length: 200 }),
     /**
      * Zugangstoken, AES-256-GCM-verschlüsselt. Wird nie zurückgegeben und
      * gelangt auch nicht in die Prozessargumente – siehe services/mirrors.ts.
      */
     tokenEnc: text('token_enc'),
 
-    isEnabled: boolean('is_enabled').notNull().default(true),
+    isEnabled: integer('is_enabled', { mode: 'boolean' }).notNull().default(true),
     /**
      * True: der Gegenstand wird zu einer exakten Kopie, auch durch Löschen
      * dortiger Branches. False: es werden nur Branches und Tags übertragen,
      * nichts entfernt.
      */
-    isExactCopy: boolean('is_exact_copy').notNull().default(false),
+    isExactCopy: integer('is_exact_copy', { mode: 'boolean' }).notNull().default(false),
 
     status: mirrorStatusEnum('status').notNull().default('idle'),
-    lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
+    lastSyncAt: integer('last_sync_at', { mode: 'timestamp_ms' }),
     lastError: text('last_error'),
     /** Verhindert, dass zwei Läufe desselben Spiegels sich überschneiden. */
-    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true }),
+    leaseExpiresAt: integer('lease_expires_at', { mode: 'timestamp_ms' }),
 
-    createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    createdById: text('created_by_id').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull().$defaultFn(() => new Date()),
   },
   (t) => [
     // Je Repository und Richtung höchstens ein Spiegel.

@@ -27,6 +27,7 @@ import {
   Spin,
   cx,
   formatNumber,
+  plural,
   relativeTime,
 } from '../components/ui.js';
 import { Avatar } from '../components/Shell.js';
@@ -546,7 +547,8 @@ function IssueHeader({
         <StateBadge state={issue.state} kind={issue.kind} />
         <span>
           {issue.author && <strong className="text-ink">{issue.author.username}</strong>} eröffnete
-          dies {relativeTime(issue.createdAt)} · {issue.commentCount} Kommentare
+          dies {relativeTime(issue.createdAt)} ·{' '}
+          {plural(issue.commentCount, 'Kommentar', 'Kommentare')}
         </span>
         {issue.closeReason && issue.state === 'closed' && (
           <Badge>

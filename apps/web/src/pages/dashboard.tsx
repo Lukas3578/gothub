@@ -15,6 +15,7 @@ import {
   EmptyState,
   ErrorBox,
   Input,
+  LinkButton,
   Panel,
   Select,
   Spin,
@@ -91,12 +92,7 @@ export function DashboardPage() {
                 title="Noch keine Repositories"
                 description="Lege eines an oder pushe ein bestehendes Projekt auf diese Instanz."
                 action={
-                  <Link
-                    to="/new"
-                    className="border border-accent bg-accent px-4 py-2 text-xs font-medium text-accent-ink hover:bg-accent/90"
-                  >
-                    Repository anlegen
-                  </Link>
+                  <LinkButton to={`/new`} variant="primary">Repository anlegen</LinkButton>
                 }
               />
             ) : (
@@ -191,40 +187,47 @@ function StatRow({ label, value }: { label: string; value: number }) {
   );
 }
 
+/**
+ * Eine Zeile in einer Repository-Liste.
+ *
+ * Verwendet auf Dashboard, Entdecken-Seite und Profil. Drei Entscheidungen:
+ *
+ * - Die ganze Zeile ist die Klickfläche, nicht nur der Name. Ein Name mit
+ *   acht Zeichen ist ein kleines Ziel, besonders auf dem Telefon.
+ * - Der Name steht in Textfarbe und wird erst beim Überfahren zum Akzent.
+ *   Zwanzig durchgehend eingefärbte Namen untereinander lesen sich als
+ *   Farbfläche, nicht als Liste.
+ * - Die Kennzahlen stehen in einer eigenen, leiseren Zeile. Sie werden
+ *   überflogen, nicht gelesen.
+ */
 export function RepoRow({ repo, showOwner = false }: { repo: RepositorySummary; showOwner?: boolean }) {
   return (
-    <div className="px-4 py-3 hover:bg-raised/50">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <Link to={`/${repo.fullName}`} className="link text-sm font-semibold">
-            {showOwner ? repo.fullName : repo.name}
-          </Link>
-          {repo.visibility !== 'public' && (
-            <span className="ml-2">
-              <Badge>{repo.visibility === 'private' ? 'privat' : 'intern'}</Badge>
-            </span>
-          )}
-          {repo.isFork && (
-            <span className="ml-1.5">
-              <Badge>Fork</Badge>
-            </span>
-          )}
-          {repo.isArchived && (
-            <span className="ml-1.5">
-              <Badge tone="warning">archiviert</Badge>
-            </span>
-          )}
-          {repo.description && (
-            <p className="mt-1 line-clamp-2 text-xs text-muted">{repo.description}</p>
-          )}
-        </div>
+    <Link
+      to={`/${repo.fullName}`}
+      className="group block px-4 py-3 transition-colors hover:bg-raised/60"
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="text-sm font-semibold text-ink transition-colors group-hover:text-accent">
+          {showOwner ? repo.fullName : repo.name}
+        </span>
+        {repo.visibility !== 'public' && (
+          <Badge>{repo.visibility === 'private' ? 'privat' : 'intern'}</Badge>
+        )}
+        {repo.isFork && <Badge>Fork</Badge>}
+        {repo.isArchived && <Badge tone="warning">archiviert</Badge>}
       </div>
+
+      {repo.description && (
+        <p className="mt-1 line-clamp-2 max-w-2xl text-xs leading-relaxed text-muted">
+          {repo.description}
+        </p>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-2xs text-faint">
         {repo.primaryLanguage && (
           <span className="flex items-center gap-1.5">
             <span
-              className="inline-block h-2.5 w-2.5"
+              className="inline-block h-2.5 w-2.5 border border-line"
               style={{ background: languageColor(repo.primaryLanguage) }}
             />
             {repo.primaryLanguage}
@@ -235,7 +238,7 @@ export function RepoRow({ repo, showOwner = false }: { repo: RepositorySummary; 
         {repo.sizeBytes > 0 && <span>{formatBytes(repo.sizeBytes)}</span>}
         <span>Aktualisiert {relativeTime(repo.pushedAt ?? repo.updatedAt)}</span>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -448,7 +451,7 @@ export function ExplorePage() {
             placeholder="Name oder Beschreibung"
           />
         </div>
-        <div className="w-40">
+        <div className="w-52">
           <Select label="Sortierung" value={sort} onChange={(e) => setSort(e.target.value)}>
             <option value="updated">Zuletzt aktualisiert</option>
             <option value="created">Neueste</option>

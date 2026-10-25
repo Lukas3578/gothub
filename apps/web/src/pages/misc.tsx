@@ -23,6 +23,7 @@ import {
   EmptyState,
   ErrorBox,
   Input,
+  LinkButton,
   Panel,
   Select,
   Spin,
@@ -449,12 +450,9 @@ export function OrganizationPage() {
           </p>
         </div>
         {canAdmin && (
-          <Link
-            to={`/new?owner=${data.name}`}
-            className="border border-accent bg-accent px-3 py-1.5 text-xs font-medium text-accent-ink hover:bg-accent/90"
-          >
+          <LinkButton to={`/new?owner=${data.name}`} variant="primary" size="sm">
             Neues Repository
-          </Link>
+          </LinkButton>
         )}
       </header>
 
@@ -638,7 +636,7 @@ function TeamList({
                 required
               />
             </div>
-            <div className="w-40">
+            <div className="w-52">
               <Select
                 label="Standardrecht"
                 value={permission}
@@ -751,7 +749,7 @@ function TeamDetail({
 
       {canAdmin && (
         <form onSubmit={grant} className="flex flex-wrap items-end gap-2">
-          <div className="w-40">
+          <div className="w-52">
             <Input
               label="Repository"
               value={repo}

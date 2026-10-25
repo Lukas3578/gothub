@@ -6,6 +6,8 @@ export default defineConfig({
     alias: { '@forge/shared': resolve(__dirname, '../../packages/shared/src/index.ts') },
   },
   test: {
+    // Legt vor dem Lauf eine frische Testdatenbank als Datei an.
+    globalSetup: ['./vitest.globalSetup.ts'],
     // Die Tests teilen sich eine Datenbank und echte Repositories auf der
     // Platte; parallele Dateien würden sich gegenseitig stören.
     fileParallelism: false,

@@ -15,7 +15,7 @@ import {
   webhookDeliveries,
   webhooks,
 } from '../db/schema.js';
-import { conflict, notFound, validationFailed } from '../lib/errors.js';
+import { conflict, isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 import { encryptSecret, generateToken } from '../lib/crypto.js';
 import { requireRepositoryAccess } from '../services/permissions.js';
 import { loadUserRefs } from '../services/issues.js';
@@ -198,7 +198,7 @@ export async function registerReleaseRoutes(app: FastifyInstance): Promise<void>
         reply.code(201);
         return toSummary(created!, [], access.ownerName, access.repository.name);
       } catch (error) {
-        if (String(error).includes('releases_repo_tag_key')) {
+        if (isUniqueViolation(error, 'releases_repo_tag_key', 'releases.tag_name')) {
           throw conflict('Für dieses Tag existiert bereits ein Release.');
         }
         throw error;
@@ -324,7 +324,7 @@ export async function registerReleaseRoutes(app: FastifyInstance): Promise<void>
         return { id: asset!.id, name: asset!.name, sizeBytes: asset!.sizeBytes, sha256: stored.sha256 };
       } catch (error) {
         await deleteObject(stored.storageKey);
-        if (String(error).includes('release_assets_release_name_key')) {
+        if (isUniqueViolation(error, 'release_assets_release_name_key', 'release_assets.name')) {
           throw conflict('Eine Datei mit diesem Namen hängt bereits an diesem Release.');
         }
         throw error;
@@ -474,7 +474,10 @@ export async function registerReleaseRoutes(app: FastifyInstance): Promise<void>
           isActive: webhooks.isActive,
           contentType: webhooks.contentType,
           consecutiveFailures: webhooks.consecutiveFailures,
-          hasSecret: sql<boolean>`${webhooks.secretEnc} IS NOT NULL`,
+          // mapWith(Boolean): SQLite liefert für einen Vergleich 0 oder 1,
+          // PostgreSQL false oder true. Ohne die Umwandlung stünde in der
+          // Antwort eine Zahl, wo die Oberfläche einen Wahrheitswert erwartet.
+          hasSecret: sql<boolean>`${webhooks.secretEnc} IS NOT NULL`.mapWith(Boolean),
           createdAt: webhooks.createdAt,
         })
         .from(webhooks)

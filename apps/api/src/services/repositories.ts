@@ -28,7 +28,7 @@ import {
   users,
   watches,
 } from '../db/schema.js';
-import { conflict, forbidden, notFound, validationFailed } from '../lib/errors.js';
+import { conflict, forbidden, isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 import {
   createRepository as createGitRepository,
   destroyRepository,
@@ -124,7 +124,7 @@ export async function createRepository(
       .returning();
     created = rows[0]!;
   } catch (error) {
-    if (String(error).includes('repositories_owner_name_key')) {
+    if (isUniqueViolation(error, 'repositories_owner_name_key', 'repositories.name_lower')) {
       throw conflict(`${input.ownerName}/${name} existiert bereits.`);
     }
     throw error;
@@ -308,7 +308,7 @@ export async function forkRepository(
       .returning();
     created = rows[0]!;
   } catch (error) {
-    if (String(error).includes('repositories_owner_name_key')) {
+    if (isUniqueViolation(error, 'repositories_owner_name_key', 'repositories.name_lower')) {
       throw conflict(`${targetOwnerName}/${name} existiert bereits.`);
     }
     throw error;
@@ -411,7 +411,7 @@ export async function updateRepository(
   try {
     await db.update(repositories).set(patch).where(eq(repositories.id, repositoryId));
   } catch (error) {
-    if (String(error).includes('repositories_owner_name_key')) {
+    if (isUniqueViolation(error, 'repositories_owner_name_key', 'repositories.name_lower')) {
       throw conflict('Unter diesem Besitzer existiert bereits ein Repository mit diesem Namen.');
     }
     throw error;
@@ -479,7 +479,7 @@ export async function transferRepository(
       .set({ ownerNamespaceId: owner.namespace.id, updatedAt: new Date() })
       .where(eq(repositories.id, repositoryId));
   } catch (error) {
-    if (String(error).includes('repositories_owner_name_key')) {
+    if (isUniqueViolation(error, 'repositories_owner_name_key', 'repositories.name_lower')) {
       throw conflict('Der neue Besitzer hat bereits ein Repository mit diesem Namen.');
     }
     throw error;
@@ -525,9 +525,9 @@ export async function setStar(
       if (deleted.length > 0) {
         await tx
           .update(repositories)
-          // GREATEST verhindert negative Zähler, falls die Buchführung einmal
-          // auseinanderläuft.
-          .set({ starCount: sql`GREATEST(${repositories.starCount} - 1, 0)` })
+          // MAX mit zwei Argumenten verhindert negative Zähler, falls die
+          // Buchführung einmal auseinanderläuft. (SQLite nennt GREATEST so.)
+          .set({ starCount: sql`MAX(${repositories.starCount} - 1, 0)` })
           .where(eq(repositories.id, repositoryId));
       }
     }
@@ -566,7 +566,7 @@ export async function setWatch(
       if (deleted.length > 0) {
         await tx
           .update(repositories)
-          .set({ watcherCount: sql`GREATEST(${repositories.watcherCount} - 1, 0)` })
+          .set({ watcherCount: sql`MAX(${repositories.watcherCount} - 1, 0)` })
           .where(eq(repositories.id, repositoryId));
       }
     }

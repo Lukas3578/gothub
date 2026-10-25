@@ -4,7 +4,8 @@
  * Es wird nichts simuliert: die Tests starten die vollständige Anwendung,
  * legen Repositories auf der Festplatte an und rufen git auf.
  *
- * Voraussetzung: PostgreSQL und eine migrierte Datenbank. Die Tests räumen
+ * Voraussetzung: keine. Vor dem Lauf legt vitest.globalSetup.ts eine frische
+ * libSQL-Datei an und migriert sie – es braucht keinen Datenbankserver. Die Tests räumen
  * die von ihnen angelegten Daten am Ende wieder auf.
  */
 

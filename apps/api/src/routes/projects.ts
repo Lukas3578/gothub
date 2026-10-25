@@ -23,7 +23,7 @@ import {
   projectColumns,
   repositories,
 } from '../db/schema.js';
-import { notFound, validationFailed } from '../lib/errors.js';
+import { isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 import { requireRepositoryAccess } from '../services/permissions.js';
 
 const POSITION_GAP = 1000;
@@ -72,7 +72,7 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
         .select({
           board: projectBoards,
           cardCount: sql<number>`(
-            SELECT count(*)::int FROM project_cards
+            SELECT count(*) FROM project_cards
             JOIN project_columns ON project_columns.id = project_cards.column_id
             WHERE project_columns.board_id = ${projectBoards.id}
           )`,
@@ -120,7 +120,7 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
         // Die Nummer wird innerhalb der Transaktion vergeben; der
         // UNIQUE-Index auf (Repository, Nummer) fängt ein Wettrennen ab.
         const maxRows = await tx
-          .select({ maximum: sql<number>`COALESCE(MAX(${projectBoards.number}), 0)::int` })
+          .select({ maximum: sql<number>`COALESCE(MAX(${projectBoards.number}), 0)` })
           .from(projectBoards)
           .where(eq(projectBoards.repositoryId, access.repository.id));
 
@@ -298,7 +298,7 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
       const board = await loadBoard(access.repository.id, Number(request.params.number));
 
       const maxRows = await db
-        .select({ maximum: sql<number>`COALESCE(MAX(${projectColumns.position}), 0)::int` })
+        .select({ maximum: sql<number>`COALESCE(MAX(${projectColumns.position}), 0)` })
         .from(projectColumns)
         .where(eq(projectColumns.boardId, board.id));
 
@@ -401,7 +401,7 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
       }
 
       const maxRows = await db
-        .select({ maximum: sql<number>`COALESCE(MAX(${projectCards.position}), 0)::int` })
+        .select({ maximum: sql<number>`COALESCE(MAX(${projectCards.position}), 0)` })
         .from(projectCards)
         .where(eq(projectCards.columnId, column.id));
 
@@ -420,7 +420,7 @@ export async function registerProjectRoutes(app: FastifyInstance): Promise<void>
         reply.code(201);
         return { id: created!.id, position: created!.position };
       } catch (error) {
-        if (String(error).includes('project_cards_issue_key')) {
+        if (isUniqueViolation(error, 'project_cards_issue_key', 'project_cards.issue_id')) {
           throw validationFailed('Dieses Issue liegt bereits in dieser Spalte.');
         }
         throw error;

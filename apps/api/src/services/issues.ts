@@ -40,7 +40,7 @@ import {
   repositories,
   users,
 } from '../db/schema.js';
-import { conflict, forbidden, notFound, validationFailed } from '../lib/errors.js';
+import { conflict, forbidden, isUniqueViolation, notFound, validationFailed } from '../lib/errors.js';
 import { config } from '../config.js';
 import { avatarUrl } from './avatars.js';
 
@@ -168,7 +168,7 @@ export async function listIssues(
     // Einfache Teilstringsuche über Titel und Text. Für große Instanzen gehört
     // hier ein Volltextindex hin; das ist in der Suche separat umgesetzt.
     const pattern = `%${filter.search}%`;
-    conditions.push(sql`(${issues.title} ILIKE ${pattern} OR ${issues.body} ILIKE ${pattern})`);
+    conditions.push(sql`(${issues.title} LIKE ${pattern} OR ${issues.body} LIKE ${pattern})`);
   }
 
   if (filter.author) {
@@ -243,13 +243,13 @@ export async function listIssues(
     .limit(filter.perPage)
     .offset((filter.page - 1) * filter.perPage);
 
-  const totalRows = await db.select({ total: sql<number>`count(*)::int` }).from(issues).where(where);
+  const totalRows = await db.select({ total: sql<number>`count(*)` }).from(issues).where(where);
 
   // Zähler für die Umschaltung offen/geschlossen. Bewusst ohne die übrigen
   // Filter: die Umschaltung soll zeigen, wie viele Issues es insgesamt gibt,
   // nicht wie viele der aktuellen Filterung entsprechen.
   const openClosed = await db
-    .select({ state: issues.state, count: sql<number>`count(*)::int` })
+    .select({ state: issues.state, count: sql<number>`count(*)` })
     .from(issues)
     .where(
       and(
@@ -556,9 +556,13 @@ export async function setIssueState(
     const delta = state === 'closed' ? -1 : 1;
     const column = issue.kind === 'issue' ? 'open_issue_count' : 'open_pull_request_count';
 
-    await tx.execute(
+    // MAX statt GREATEST: SQLite nennt die Funktion mit mehreren Argumenten
+    // so. Der Zähler darf nicht unter null fallen, falls er je aus dem Tritt
+    // gerät – ein negativer Zähler in der Oberfläche wäre schlimmer als ein
+    // zu hoher.
+    await tx.run(
       sql`UPDATE repositories
-          SET ${sql.raw(column)} = GREATEST(${sql.raw(column)} + ${delta}, 0)
+          SET ${sql.raw(column)} = MAX(${sql.raw(column)} + ${delta}, 0)
           WHERE id = ${issue.repositoryId}`,
     );
 
@@ -678,7 +682,7 @@ export async function deleteComment(commentId: string): Promise<void> {
     await tx.delete(issueComments).where(eq(issueComments.id, commentId));
     await tx
       .update(issues)
-      .set({ commentCount: sql`GREATEST(${issues.commentCount} - 1, 0)` })
+      .set({ commentCount: sql`MAX(${issues.commentCount} - 1, 0)` })
       .where(eq(issues.id, rows[0].issueId));
   });
 }
@@ -843,7 +847,7 @@ export async function createLabel(
       description: created!.description,
     };
   } catch (error) {
-    if (String(error).includes('labels_repo_name_key')) {
+    if (isUniqueViolation(error, 'labels_repo_name_key', 'labels.name')) {
       throw conflict('Ein Label mit diesem Namen existiert bereits.');
     }
     throw error;
@@ -892,7 +896,7 @@ export async function listMilestones(
     .select({
       milestoneId: issues.milestoneId,
       state: issues.state,
-      count: sql<number>`count(*)::int`,
+      count: sql<number>`count(*)`,
     })
     .from(issues)
     .where(
@@ -924,7 +928,7 @@ export async function createMilestone(
 
   return db.transaction(async (tx) => {
     const maxRows = await tx
-      .select({ max: sql<number>`COALESCE(MAX(${milestones.number}), 0)::int` })
+      .select({ max: sql<number>`COALESCE(MAX(${milestones.number}), 0)` })
       .from(milestones)
       .where(eq(milestones.repositoryId, repositoryId));
 

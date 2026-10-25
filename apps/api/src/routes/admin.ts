@@ -8,7 +8,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, count, desc, eq, gte, ilike, isNull, isNotNull, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   abuseReports,
@@ -89,7 +89,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       db.select({ value: count() }).from(sessions).where(isNull(sessions.revokedAt)),
       db.select({ value: count() }).from(users).where(gte(users.createdAt, since)),
       db
-        .select({ value: sql<number>`COALESCE(SUM(${repositories.sizeBytes}), 0)::bigint` })
+        .select({ value: sql<number>`COALESCE(SUM(${repositories.sizeBytes}), 0)` })
         .from(repositories)
         .where(isNull(repositories.deletedAt)),
     ]);
@@ -132,7 +132,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
     if (query.q) {
       const pattern = `%${query.q}%`;
       conditions.push(
-        or(ilike(namespaces.name, pattern), ilike(users.email, pattern), ilike(users.displayName, pattern))!,
+        or(like(namespaces.name, pattern), like(users.email, pattern), like(users.displayName, pattern))!,
       );
     }
     if (query.status === 'suspended') conditions.push(isNotNull(users.suspendedAt));
@@ -284,7 +284,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
 
     const conditions = [];
     if (!query.includeDeleted) conditions.push(isNull(repositories.deletedAt));
-    if (query.q) conditions.push(ilike(repositories.name, `%${query.q}%`));
+    if (query.q) conditions.push(like(repositories.name, `%${query.q}%`));
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
 
@@ -327,7 +327,7 @@ export async function registerAdminRoutes(app: FastifyInstance): Promise<void> {
       .parse(request.query);
 
     const conditions = [];
-    if (query.action) conditions.push(ilike(auditLogs.action, `%${query.action}%`));
+    if (query.action) conditions.push(like(auditLogs.action, `%${query.action}%`));
     if (query.actor) {
       conditions.push(
         sql`${auditLogs.actorId} = (

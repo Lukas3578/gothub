@@ -2,7 +2,7 @@
  * Prüfung des Speicherorts beim Start.
  *
  * Hintergrund: Git-Repositories und Uploads liegen im Dateisystem, die
- * zugehörigen Datensätze in PostgreSQL. Viele Plattformen – Render, Heroku,
+ * zugehörigen Datensätze in der Datenbank. Viele Plattformen – Render, Heroku,
  * Fly ohne Volume – geben einem Dienst ein **flüchtiges** Dateisystem: bei
  * jedem Deployment und jedem Neustart ist alles weg, was zur Laufzeit
  * geschrieben wurde. Die Datenbank überlebt, weil sie ein eigener Dienst ist.
@@ -57,7 +57,7 @@ export async function checkRepositoryStorage(): Promise<StorageReport> {
   // Begrenzt auf 500 Einträge: die Prüfung soll den Start nicht verzögern.
   // Für eine klare Aussage genügt eine Stichprobe.
   const rows = await db
-    .execute(
+    .all(
       sql`SELECT r.id, n.name AS owner_name, r.name
           FROM repositories r
           JOIN namespaces n ON n.id = r.owner_namespace_id

@@ -43,6 +43,7 @@ import {
   formatBytes,
   formatNumber,
   languageColor,
+  plural,
   relativeTime,
 } from '../components/ui.js';
 import { Avatar } from '../components/Shell.js';
@@ -1055,7 +1056,7 @@ function CommitList({ repo }: RepoContext) {
             className="h-7 text-xs"
           />
         </div>
-        <span className="ml-auto text-2xs text-faint">{formatNumber(total)} Commits</span>
+        <span className="ml-auto text-2xs text-faint">{plural(total, 'Commit', 'Commits')}</span>
       </div>
 
       {error ? (
@@ -1165,7 +1166,7 @@ function CommitView({ repo }: RepoContext) {
           <span className="ml-auto flex gap-3">
             <span className="text-success">+{formatNumber(commit.stats.additions)}</span>
             <span className="text-danger">−{formatNumber(commit.stats.deletions)}</span>
-            <span>{commit.stats.filesChanged} Dateien</span>
+            <span>{plural(commit.stats.filesChanged, 'Datei', 'Dateien')}</span>
           </span>
         </div>
       </Panel>

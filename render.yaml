@@ -14,9 +14,9 @@
 #   2. Wird sie später als Blueprint verbunden, treffen die Namen die
 #      bestehenden Dienste statt neue anzulegen.
 #
-# Ein `databases:`-Block fehlt bewusst. Er würde Render anweisen, eine
-# Datenbank zu verwalten – im schlechtesten Fall die bestehende zu ersetzen.
-# Die vorhandene Datenbank wird ausschließlich über DATABASE_URL referenziert.
+# Ein `databases:`-Block fehlt: die Datenbank liegt bei Turso und ist kein
+# Render-Dienst. Referenziert wird sie über DATABASE_URL und TURSO_AUTH_TOKEN,
+# beide im Dashboard gesetzt.
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
@@ -75,7 +75,10 @@ services:
         value: console
       # sync: false bedeutet: Wert wird im Dashboard gesetzt und nicht aus
       # dieser Datei überschrieben. Geheimnisse gehören nicht ins Repository.
+      # libsql://<datenbank>-<org>.turso.io
       - key: DATABASE_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
         sync: false
       - key: SESSION_SECRET
         sync: false

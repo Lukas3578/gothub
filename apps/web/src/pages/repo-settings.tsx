@@ -137,7 +137,7 @@ function CollaboratorSettings({ repo }: { repo: RepositoryDetail }) {
               required
             />
           </div>
-          <div className="w-40">
+          <div className="w-52">
             <Select
               label="Berechtigung"
               value={permission}

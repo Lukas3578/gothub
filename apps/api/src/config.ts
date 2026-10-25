@@ -67,7 +67,16 @@ const schema = z.object({
   PUBLIC_API_URL: z.string().url().optional(),
   PUBLIC_WEB_URL: z.string().url().optional(),
 
+  /**
+   * libSQL-Adresse. Drei Formen sind gültig:
+   *
+   *   file:./data/forge.db          lokale Datei, kein Server nötig
+   *   libsql://name-org.turso.io    Turso, zusammen mit TURSO_AUTH_TOKEN
+   *   http://127.0.0.1:8080         lokaler sqld, etwa im Container
+   */
   DATABASE_URL: z.string().min(1, 'DATABASE_URL ist erforderlich'),
+  /** Zugangstoken für Turso. Bei einer lokalen Datei nicht nötig. */
+  TURSO_AUTH_TOKEN: z.string().optional(),
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
   SESSION_SECRET: z
@@ -149,6 +158,28 @@ const publicWebUrl = stripSlash(
 
 const allowedOrigins = [...new Set([publicWebUrl, ...ADDITIONAL_ALLOWED_ORIGINS])];
 
+/**
+ * Macht einen relativen `file:`-Pfad eindeutig.
+ *
+ * `file:./data/forge.db` ist relativ zum Arbeitsverzeichnis des Prozesses –
+ * und das unterscheidet sich je nach Startweg: `npm run dev:api` startet in
+ * `apps/api`, `npm start` in der Wurzel. Dieselbe Konfiguration zeigte so auf
+ * zwei verschiedene Dateien, und der Server fand die migrierte Datenbank
+ * nicht ("no such table: namespaces").
+ *
+ * Deshalb wird gegen die Wurzel des Projekts aufgelöst, genau wie beim
+ * Git-Speicher und beim Upload-Verzeichnis. Absolute Pfade und entfernte
+ * Adressen bleiben unangetastet.
+ */
+function resolveDatabaseUrl(url: string): string {
+  if (!url.startsWith('file:')) return url;
+
+  const path = url.slice('file:'.length);
+  if (path.startsWith('/')) return url;
+
+  return `file:${resolve(repoRoot, path)}`;
+}
+
 export const config = {
   env: env.NODE_ENV,
   isProduction: env.NODE_ENV === 'production',
@@ -177,7 +208,10 @@ export const config = {
     isCrossSite: !isSameHost(publicApiUrl, publicWebUrl),
   },
 
-  database: { url: env.DATABASE_URL },
+  database: {
+    url: resolveDatabaseUrl(env.DATABASE_URL),
+    authToken: env.TURSO_AUTH_TOKEN,
+  },
   redis: { url: env.REDIS_URL },
 
   security: {

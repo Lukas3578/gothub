@@ -378,7 +378,7 @@ export async function markAllRead(userId: string): Promise<void> {
 
 export async function unreadCount(userId: string): Promise<number> {
   const rows = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ count: sql<number>`count(*)` })
     .from(notifications)
     .where(and(eq(notifications.userId, userId), isNull(notifications.readAt)));
   return rows[0]?.count ?? 0;

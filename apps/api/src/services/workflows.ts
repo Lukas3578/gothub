@@ -49,8 +49,19 @@ import { loadUserRefs } from './issues.js';
 import { dispatchWebhook } from './webhooks.js';
 import { notify } from './notifications.js';
 
-/** Verzeichnis, in dem Workflow-Dateien erwartet werden. */
-const WORKFLOW_DIR = '.forge/workflows';
+/**
+ * Verzeichnisse, in denen Workflow-Dateien erwartet werden.
+ *
+ * `.github/workflows` steht zuerst, weil fast jedes bestehende Projekt seine
+ * Dateien dort liegen hat. Ein von GitHub übernommenes Repository soll ohne
+ * Umbenennen bauen. `.forge/workflows` bleibt gültig, damit eine Instanz, die
+ * bewusst nichts mit GitHub zu tun haben will, einen eigenen Ort hat.
+ *
+ * Liegen Dateien in beiden Verzeichnissen, gelten beide. Der Pfad ist
+ * Bestandteil der Kennung eines Workflows, also kollidieren gleiche
+ * Dateinamen nicht.
+ */
+const WORKFLOW_DIRS = ['.github/workflows', '.forge/workflows'] as const;
 
 // ---------------------------------------------------------------------------
 // Dateien einlesen
@@ -65,11 +76,27 @@ const WORKFLOW_DIR = '.forge/workflows';
  * sichtbar kaputte.
  */
 export async function syncWorkflows(repositoryId: string, ref: string): Promise<void> {
-  let entries;
-  try {
-    entries = await listTree(repositoryId, ref, WORKFLOW_DIR);
-  } catch {
-    // Kein Workflow-Verzeichnis: alle bisherigen Einträge als entfernt
+  const files: { name: string; path: string }[] = [];
+
+  for (const directory of WORKFLOW_DIRS) {
+    let entries;
+    try {
+      entries = await listTree(repositoryId, ref, directory);
+    } catch {
+      // Dieses Verzeichnis gibt es nicht – das ist der Normalfall für eines
+      // der beiden.
+      continue;
+    }
+
+    for (const entry of entries) {
+      if (entry.type === 'blob' && /\.(ya?ml)$/i.test(entry.name)) {
+        files.push({ name: entry.name, path: entry.path });
+      }
+    }
+  }
+
+  if (files.length === 0) {
+    // Keine Workflow-Dateien: alle bisherigen Einträge als entfernt
     // behandeln, aber die Läufe erhalten.
     await db
       .update(workflows)
@@ -77,10 +104,6 @@ export async function syncWorkflows(repositoryId: string, ref: string): Promise<
       .where(eq(workflows.repositoryId, repositoryId));
     return;
   }
-
-  const files = entries.filter(
-    (entry) => entry.type === 'blob' && /\.(ya?ml)$/i.test(entry.name),
-  );
 
   const seenPaths: string[] = [];
 
@@ -185,15 +208,20 @@ export async function triggerWorkflows(context: TriggerContext): Promise<string[
   // dem Default-Branch. Sonst liefe ein Workflow, der auf einem Feature-Branch
   // neu hinzugefügt wurde, erst nach dem Merge – also genau dann nicht, wenn
   // man ihn braucht.
-  let files: { path: string; name: string }[];
-  try {
-    const entries = await listTree(context.repositoryId, context.headSha, WORKFLOW_DIR);
-    files = entries
-      .filter((entry) => entry.type === 'blob' && /\.(ya?ml)$/i.test(entry.name))
-      .map((entry) => ({ path: entry.path, name: entry.name }));
-  } catch {
-    return [];
+  const files: { path: string; name: string }[] = [];
+  for (const directory of WORKFLOW_DIRS) {
+    try {
+      const entries = await listTree(context.repositoryId, context.headSha, directory);
+      for (const entry of entries) {
+        if (entry.type === 'blob' && /\.(ya?ml)$/i.test(entry.name)) {
+          files.push({ path: entry.path, name: entry.name });
+        }
+      }
+    } catch {
+      continue;
+    }
   }
+  if (files.length === 0) return [];
 
   const createdRuns: string[] = [];
 
@@ -304,7 +332,7 @@ async function createRun(
   return db.transaction(async (tx) => {
     // Laufende Nummer je Repository, atomar über eine Unterabfrage ermittelt.
     const numberRows = await tx
-      .select({ max: sql<number>`COALESCE(MAX(${workflowRuns.runNumber}), 0)::int` })
+      .select({ max: sql<number>`COALESCE(MAX(${workflowRuns.runNumber}), 0)` })
       .from(workflowRuns)
       .where(eq(workflowRuns.repositoryId, repository.id));
 
@@ -444,54 +472,59 @@ export interface JobAssignment {
 /**
  * Weist einem Runner den nächsten passenden Job zu.
  *
- * Der entscheidende Teil ist das `UPDATE ... WHERE id = (SELECT ...)` mit
- * `FOR UPDATE SKIP LOCKED`: zwei Runner, die gleichzeitig fragen, bekommen
- * garantiert verschiedene Jobs, ohne dass eine Sperre den anderen blockiert.
+ * Zwei Runner, die gleichzeitig fragen, müssen verschiedene Jobs bekommen.
+ * In PostgreSQL erledigte das `FOR UPDATE SKIP LOCKED`. SQLite kennt das
+ * nicht und braucht es auch nicht: es lässt immer nur einen Schreibvorgang
+ * zur Zeit zu. Der zweite Runner wertet seine Unterabfrage erst aus, wenn
+ * der erste fertig ist, und sieht den vergebenen Job dann nicht mehr als
+ * `queued`.
+ *
+ * Die Bedingung `status = 'queued'` steht zusätzlich im äußeren `WHERE`.
+ * Damit hängt die Richtigkeit nicht allein am Sperrverhalten der Datenbank,
+ * sondern steht in der Abfrage selbst.
  */
 export async function claimJob(
   runnerId: string,
   labels: string[],
   leaseSeconds = 120,
 ): Promise<JobAssignment | null> {
-  // In rohem SQL muss der Zeitstempel als ISO-Zeichenkette übergeben werden;
-  // der Treiber serialisiert ein Date-Objekt dort nicht automatisch.
-  const leaseUntil = new Date(Date.now() + leaseSeconds * 1000).toISOString();
+  // Zeitstempel liegen als Millisekunden seit Epoche in der Datenbank; in
+  // rohem SQL muss die Zahl übergeben werden, nicht das Date-Objekt.
+  const now = Date.now();
+  const leaseUntil = now + leaseSeconds * 1000;
 
-  // Die Labels werden als jsonb-Array übergeben und mit dem Containment-
-  // Operator verglichen. Ein `= ANY(...)` mit einem JavaScript-Array würde
-  // hier als Record übergeben und von PostgreSQL abgelehnt.
+  // Die Labels des Runners als JSON-Array. `json_each` zerlegt es in Zeilen,
+  // sodass sich die Schnittmenge mit den geforderten Labels bilden lässt.
   const labelsJson = JSON.stringify(labels);
 
-  const claimed = await db.execute(sql`
+  const claimed = await db.all<{ id: string; run_id: string }>(sql`
     UPDATE workflow_jobs
     SET status = 'running',
         runner_id = ${runnerId},
-        lease_expires_at = ${leaseUntil}::timestamptz,
-        started_at = COALESCE(started_at, now())
-    WHERE id = (
-      SELECT j.id
-      FROM workflow_jobs j
-      JOIN workflow_runs r ON r.id = j.run_id
-      WHERE j.status = 'queued'
-        AND r.status IN ('queued', 'running')
-        AND (
-          j.required_labels = '[]'::jsonb
-          OR EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements_text(j.required_labels) AS required(label)
-            WHERE required.label IN (
-              SELECT jsonb_array_elements_text(${labelsJson}::jsonb)
+        lease_expires_at = ${leaseUntil},
+        started_at = COALESCE(started_at, ${now})
+    WHERE status = 'queued'
+      AND id = (
+        SELECT j.id
+        FROM workflow_jobs j
+        JOIN workflow_runs r ON r.id = j.run_id
+        WHERE j.status = 'queued'
+          AND r.status IN ('queued', 'running')
+          AND (
+            json_array_length(j.required_labels) = 0
+            OR EXISTS (
+              SELECT 1
+              FROM json_each(j.required_labels) AS required
+              WHERE required.value IN (SELECT value FROM json_each(${labelsJson}))
             )
           )
-        )
-      ORDER BY j.created_at ASC
-      FOR UPDATE OF j SKIP LOCKED
-      LIMIT 1
-    )
+        ORDER BY j.created_at ASC
+        LIMIT 1
+      )
     RETURNING id, run_id
   `);
 
-  const row = (claimed as unknown as { id: string; run_id: string }[])[0];
+  const row = claimed[0];
   if (!row) return null;
 
   return buildAssignment(row.id, row.run_id);
@@ -697,7 +730,7 @@ export async function appendLog(
   content: string,
 ): Promise<void> {
   const sequenceRows = await db
-    .select({ max: sql<number>`COALESCE(MAX(${workflowLogChunks.sequence}), -1)::int` })
+    .select({ max: sql<number>`COALESCE(MAX(${workflowLogChunks.sequence}), -1)` })
     .from(workflowLogChunks)
     .where(eq(workflowLogChunks.jobId, jobId));
 
@@ -956,7 +989,7 @@ export async function listRuns(
     .offset((filter.page - 1) * filter.perPage);
 
   const totalRows = await db
-    .select({ total: sql<number>`count(*)::int` })
+    .select({ total: sql<number>`count(*)` })
     .from(workflowRuns)
     .where(where);
 

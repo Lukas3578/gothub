@@ -4,8 +4,8 @@ Maßstab dieser Liste: durch automatisierte Tests oder einen nachvollzogenen
 Durchlauf gegen den laufenden Server belegt. Was nur im Schema vorbereitet ist,
 steht unter „Nicht implementiert" – nicht bei den fertigen Funktionen.
 
-Stand: 24.10.2026 · 221 Tests (190 Backend, 31 Frontend), alle grün ·
-41.000 Zeilen · 62 Tabellen · 217 HTTP-Endpunkte · vier Pakete typgeprüft
+Stand: 25.10.2026 · 225 Tests (194 Backend, 31 Frontend), alle grün ·
+41.900 Zeilen · 62 Tabellen · 217 HTTP-Endpunkte · vier Pakete typgeprüft
 
 ---
 
@@ -125,7 +125,27 @@ einzeln und gesamt, Einstellungen, Echtzeit-Updates per Server-Sent Events.
 Leserecht erhält eine Benachrichtigung zu einem privaten Repository.
 
 ### CI/CD
-Workflows als YAML unter `.forge/workflows/`, Parser mit Validierung, Trigger
+Workflow-Dateien werden aus `.github/workflows` **und** `.forge/workflows`
+gelesen; das YAML-Format ist das von GitHub Actions. `actions/checkout`,
+`actions/setup-node` und `actions/upload-artifact` sind unter ihrem
+GitHub-Namen umgesetzt, die Version hinter `@` wird ignoriert. Einen
+Marktplatz gibt es nicht – fremder Code mit Zugriff auf Secrets und den
+Docker-Socket wäre ein erhebliches Risiko.
+
+Schlüssel, die hier nichts bewirken, werden abgewiesen statt übergangen:
+`strategy`, `services`, `defaults`, `outputs`, `environment`, `concurrency`,
+`permissions`. Eine Datei mit `strategy: matrix` liefe sonst als ein
+einziger Job, ohne dass jemand die fehlenden bemerkt.
+
+*Belegt:* vier Tests, darunter eine unveränderte GitHub-CI-Datei und die
+Ablehnung einer Matrix.
+
+*Nicht belegt:* `actions/setup-node` lädt Node von nodejs.org – in dieser
+Umgebung ist weder Docker Hub noch nodejs.org erreichbar, der Weg ist also
+geschrieben, aber nicht durchlaufen.
+
+**Darunter unverändert:**
+Parser mit Validierung, Trigger
 für Push, Pull Request, manuell und zeitgesteuert (Cron), Job-Queue mit
 Abhängigkeiten (`needs`) und Label-Zuweisung, Runner-Registrierung mit Lease
 und Heartbeat, Ausführung in isolierten Docker-Containern, Log-Streaming,
@@ -170,6 +190,23 @@ Deaktivierung nach wiederholtem Fehlschlag.
 
 *Belegt:* SSRF-Schutz erkennt interne Adressbereiche; das Geheimnis wird nur
 beim Anlegen zurückgegeben.
+
+### Datenhaltung: libSQL / Turso
+Das gesamte Schema läuft auf libSQL. Lokal ist die Datenbank eine Datei –
+kein Server, kein Container; auch die Tests legen sich vor jedem Lauf eine
+eigene Datei an. In Betrieb zeigt dieselbe Variable auf Turso.
+
+Portiert wurden: 17 Enums (jetzt Text mit Wertebereich), 18 JSONB-Spalten
+(JSON-Text), 174 UUID- und 110 Zeitstempel-Spalten, 33 Postgres-Casts, der
+Advisory-Lock der Migration, `ILIKE`, `GREATEST`, `now()`, die
+jsonb-Funktionen und die Jobvergabe an Runner, die vorher auf
+`FOR UPDATE SKIP LOCKED` beruhte.
+
+*Belegt:* dieselben 194 Backend-Tests wie vorher, unverändert.
+
+*Nicht belegt:* der Betrieb gegen eine echte Turso-Instanz. Geprüft ist der
+Dialekt gegen eine lokale libSQL-Datei – derselbe Code, dasselbe Protokoll,
+aber ohne Netz dazwischen. Ein Token hat diese Umgebung nicht.
 
 ### Dateien im Browser bearbeiten
 Anlegen, Bearbeiten, Umbenennen, Löschen und Hochladen mehrerer Dateien, je
@@ -258,6 +295,18 @@ Telefonbreite.
 - Die Seitenbreite stand an sieben Stellen im Quelltext; jetzt an einer, und
   bei 1280 statt 1400 px.
 
+Zweiter Durchgang:
+
+- Repository-Zeilen sind ganzflächig anklickbar statt nur am Namen, und der
+  Name steht in Textfarbe statt durchgehend im Akzent – zwanzig eingefärbte
+  Namen untereinander lesen sich als Farbfläche, nicht als Liste.
+- Eingabefelder heben sich von der Fläche ab, auf der sie stehen.
+- Leere Zustände belegten mit 56 px Luft mehr Fläche als eine gefüllte
+  Liste; jetzt 40 px und leisere Schrift.
+- Auswahlfelder schnitten ihre eigene Beschriftung ab („Zuletzt aktualisier").
+- „1 Commits", „1 Dateien", „1 Kommentare": Einzahl und Mehrzahl werden
+  unterschieden.
+
 Seiten: Landing, Anmeldung, Registrierung, Passwort vergessen/zurücksetzen,
 Dashboard, Repository anlegen, Entdecken, Suche, Benachrichtigungen, Profil,
 Gists (Liste, neu, Detail), Pakete, Organisation anlegen und verwalten,
@@ -273,7 +322,25 @@ Projektboards und Einstellungen.
 
 Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
 
-1. **Zwei Kopien derselben CodeMirror-Pakete.** Beim Nachinstallieren waren
+1. **Ein relativer Datenbankpfad zeigte auf zwei verschiedene Dateien.**
+   `file:./data/forge.db` ist relativ zum Arbeitsverzeichnis, und das
+   unterscheidet sich je nach Startweg: `npm run dev:api` startet in
+   `apps/api`, `npm start` in der Wurzel. Der Server fand die migrierte
+   Datenbank nicht und meldete „no such table: namespaces". Jetzt wird gegen
+   die Projektwurzel aufgelöst, und die aufgelöste Adresse steht beim Start
+   im Protokoll.
+
+2. **Doppelte Einträge lieferten 500 statt 409.** Die Erkennung hing am
+   Namen des PostgreSQL-Index in der Fehlermeldung; SQLite nennt stattdessen
+   die Spalten. Statt den Vergleich an zehn Stellen zu flicken, prüft das
+   jetzt eine Funktion, die beide Formen kennt.
+
+3. **`strategy: matrix` wurde stillschweigend verworfen.** Zod entfernt
+   unbekannte Schlüssel ohne Hinweis, also lief ein Job, der neunmal laufen
+   sollte, genau einmal – und niemand sah, dass acht Läufe fehlten. Solche
+   Schlüssel führen jetzt zu einem Fehler, der benennt, was stattdessen geht.
+
+4. **Zwei Kopien derselben CodeMirror-Pakete.** Beim Nachinstallieren waren
    `@codemirror/state`, `view`, `language` und `@lezer/highlight` mit einer
    älteren Untergrenze angegeben worden, als npm ohnehin aufgelöst hatte.
    Ergebnis: eine zweite, verschachtelte Kopie je Paket. Die Marken (`tags`)
@@ -283,72 +350,72 @@ Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
    Browser. Behoben, indem die Versionsbereiche auf den bereits aufgelösten
    Stand angehoben wurden, sodass npm wieder auf je eine Kopie zusammenführt.
 
-2. **Der Editor verschluckte Zeichen beim schnellen Tippen.** Jede Eingabe
+5. **Der Editor verschluckte Zeichen beim schnellen Tippen.** Jede Eingabe
    meldete den neuen Text nach oben, React stellte ihn verzögert wieder zu,
    und der Abgleich schrieb diesen inzwischen veralteten Stand zurück in das
    Dokument. Aus „MIT. Siehe README." wurde „MIT. Siehe .". Behoben über den
    Fokus: tippt jemand, ist der Editor die Quelle und ein von außen
    eintreffender Wert wird nicht übernommen.
 
-3. **Die Sprache landete an einer bereits verworfenen Editor-Instanz.** Das
+6. **Die Sprache landete an einer bereits verworfenen Editor-Instanz.** Das
    Nachladen des Sprachmoduls ist asynchron, der Aufbau nicht. Fiel das
    Ergebnis zwischen Aufbau und dem zusätzlichen Neuaufbau an, den React im
    Entwicklungsmodus vornimmt, stand der neue Editor ohne Sprache da. Das
    Ergebnis wird jetzt festgehalten und nach jedem Aufbau erneut angelegt.
 
-4. **`spawn git ENOENT` als Meldung für ein fehlendes Repository.** Node
+7. **`spawn git ENOENT` als Meldung für ein fehlendes Repository.** Node
    meldet denselben Fehler, wenn das Arbeitsverzeichnis nicht existiert. Beim
    flüchtigen Dateisystem ist genau das der häufige Fall, und die rohe Meldung
    schickte den Betreiber auf die Suche nach einer fehlenden Git-Installation.
    Jetzt wird unterschieden und die tatsächliche Ursache benannt.
 
-5. **Ein Commit über die Oberfläche ließ „Letzter Push: nie" stehen.** Das
+8. **Ein Commit über die Oberfläche ließ „Letzter Push: nie" stehen.** Das
    Repository tauchte dadurch auch im Dashboard nicht auf, das danach
    sortiert. Web-Commits und Pull-Spiegelungen setzen den Zeitpunkt jetzt.
 
-6. **Git-Prozess wurde zu früh beendet.** Der Abbruch hing am `close`-Event des
+9. **Git-Prozess wurde zu früh beendet.** Der Abbruch hing am `close`-Event des
    Request-Streams, das in Node bereits feuert, wenn der Body gelesen ist.
    Jeder `git clone` brach mit „expected flush after ref listing" ab.
 
-7. **Dateien ließen sich nicht löschen.** `git update-index --force-remove`
+10. **Dateien ließen sich nicht löschen.** `git update-index --force-remove`
    verlangt ein Arbeitsverzeichnis, das ein Bare-Repository nicht hat. Läuft
    jetzt über `--index-info`.
 
-8. **Irreführender 404 beim Push.** Ein Push ohne Schreibrecht auf ein
+11. **Irreführender 404 beim Push.** Ein Push ohne Schreibrecht auf ein
    *öffentliches* Repository meldete „nicht gefunden".
 
-9. **Secrets wurden nicht aufgelöst.** `interpolate` existierte, wurde aber
+12. **Secrets wurden nicht aufgelöst.** `interpolate` existierte, wurde aber
    nirgends aufgerufen: `${{ secrets.X }}` landete buchstäblich im Kommando.
 
-10. **Secrets lagen unter ihrem Klarnamen in der Umgebung jedes Schritts.** Ein
+13. **Secrets lagen unter ihrem Klarnamen in der Umgebung jedes Schritts.** Ein
    `env` im Log hätte alle offengelegt.
 
-11. **Schritt-`env` expandierte keine Secrets.** Docker ersetzt in `--env-file`
+14. **Schritt-`env` expandierte keine Secrets.** Docker ersetzt in `--env-file`
    und `--env` keine Variablen; die Schritt-Umgebung wird jetzt als
    `export`-Zeilen im Skript gesetzt, mit Quoting, das literale Teile vor der
    Shell schützt.
 
-12. **Einschleusung über die Umgebungsdatei.** Ein Wert mit Zeilenumbruch hätte
+15. **Einschleusung über die Umgebungsdatei.** Ein Wert mit Zeilenumbruch hätte
    beliebige weitere Variablen gesetzt (etwa `PATH`).
 
-13. **Secrets erschienen im Log.** Werden jetzt vor dem Senden durch `***`
+16. **Secrets erschienen im Log.** Werden jetzt vor dem Senden durch `***`
    ersetzt.
 
-14. **Artefakte fehlten in der Laufansicht.** Sie wurden hochgeladen, aber nicht
+17. **Artefakte fehlten in der Laufansicht.** Sie wurden hochgeladen, aber nicht
    mitgeliefert.
 
-15. **Doppelte Typdefinitionen.** Beim Entdoppeln der gemeinsamen Typen wurde
+18. **Doppelte Typdefinitionen.** Beim Entdoppeln der gemeinsamen Typen wurde
     die Fassung entfernt, gegen die der vorhandene Code geschrieben war – 23
     Compilerfehler auf einen Schlag. Die Typen wurden an die Implementierung
     angeglichen, weil auch die Oberfläche gegen diese Shapes gebaut war.
 
-16. **`npm publish` schlug fehl.** Der npm-Client sendet nicht belegte Felder
+19. **`npm publish` schlug fehl.** Der npm-Client sendet nicht belegte Felder
     als `null` statt sie wegzulassen; das Schema verlangte `undefined`.
 
-17. **ssh2 ließ sich nicht importieren.** Das Paket ist CommonJS ohne benannte
+20. **ssh2 ließ sich nicht importieren.** Das Paket ist CommonJS ohne benannte
     ESM-Exporte; nur der Default-Import funktioniert unter Node mit ESM.
 
-18. **SSH-Hostschlüssel im falschen Format.** ssh2 liest ed25519 nur im
+21. **SSH-Hostschlüssel im falschen Format.** ssh2 liest ed25519 nur im
     OpenSSH-Format, das Node nicht erzeugt – jetzt RSA 3072 als PKCS#1-PEM.
 
 ---
@@ -383,6 +450,11 @@ Diese Fehler fielen erst beim echten Durchlauf auf, nicht beim Schreiben:
 - **Webhook-Zustellung nur negativ geprüft.** Der SSRF-Schutz ist getestet, eine
   erfolgreiche Zustellung an einen externen Empfänger nicht – ausgehende
   Verbindungen sind in dieser Umgebung gesperrt.
+- **Kein Betrieb gegen eine echte Turso-Instanz geprüft.** Der Dialekt ist
+  gegen eine lokale libSQL-Datei belegt – derselbe Code und dasselbe
+  Protokoll, aber ohne Netz dazwischen. Was dort auffallen kann und hier
+  nicht: Latenz je Abfrage (Turso liegt in einer Region, nicht im Prozess)
+  und das Verhalten interaktiver Transaktionen über die Leitung.
 - **Spiegelung nicht gegen einen echten Hoster geprüft.** Adressprüfung,
   Token-Behandlung, Lease und Maskierung sind getestet; eine echte Übertragung
   nach GitHub nicht, weil ausgehende Verbindungen in dieser Umgebung gesperrt

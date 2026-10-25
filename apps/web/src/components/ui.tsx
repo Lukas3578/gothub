@@ -103,9 +103,17 @@ function Spinner() {
 // Formularelemente
 // ---------------------------------------------------------------------------
 
+/*
+ * Felder stehen meist auf `surface` (weiß im hellen Theme). Ein Feld in
+ * `canvas` hob sich dort kaum ab; mit der getönten Leinwand sitzt es jetzt
+ * sichtbar vertieft in der Fläche – der Unterschied, an dem man ein
+ * Eingabefeld als solches erkennt, bevor man hineinklickt.
+ */
 const FIELD_BASE =
   'w-full border border-line-strong bg-canvas px-2.5 text-ink placeholder:text-faint ' +
-  'focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60';
+  'transition-colors hover:border-faint ' +
+  'focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent ' +
+  'disabled:cursor-not-allowed disabled:opacity-60';
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -200,7 +208,17 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
           {label}
         </label>
       )}
-      <select ref={ref} id={fieldId} className={cx(FIELD_BASE, 'h-9', className)} {...props}>
+      {/*
+        min-w-0 verhindert, dass der Browser das Feld auf seine Inhaltsbreite
+        zwingt; die Mindestbreite sorgt dafür, dass Optionen wie „Zuletzt
+        aktualisiert" nicht nach drei Wörtern abgeschnitten werden.
+      */}
+      <select
+        ref={ref}
+        id={fieldId}
+        className={cx(FIELD_BASE, 'h-9 min-w-[10rem] cursor-pointer pr-8', className)}
+        {...props}
+      >
         {children}
       </select>
       {hint && <p className="text-xs text-faint">{hint}</p>}
@@ -290,11 +308,16 @@ export function EmptyState({
   description?: string;
   action?: ReactNode;
 }) {
+  /*
+   * Ein leerer Zustand soll sagen, dass hier nichts ist – nicht so viel Platz
+   * einnehmen wie ein voller. Vorher waren es 56 px Luft oben und unten,
+   * wodurch eine leere Liste mehr Fläche belegte als eine mit drei Einträgen.
+   */
   return (
-    <div className="flex flex-col items-center justify-center gap-3 px-6 py-14 text-center">
-      <p className="text-sm font-semibold text-ink">{title}</p>
-      {description && <p className="max-w-md text-sm text-muted">{description}</p>}
-      {action}
+    <div className="flex flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+      <p className="text-sm font-medium text-muted">{title}</p>
+      {description && <p className="max-w-md text-xs text-faint">{description}</p>}
+      {action && <div className="mt-1">{action}</div>}
     </div>
   );
 }
@@ -350,6 +373,17 @@ export function relativeTime(isoDate: string | null | undefined): string {
     }
   }
   return formatter.format(-Math.round(seconds / 31557600), 'year');
+}
+
+/**
+ * Einzahl oder Mehrzahl, je nach Anzahl.
+ *
+ * „1 Commits" und „1 Dateien" standen an etlichen Stellen. Für sich genommen
+ * eine Kleinigkeit – in der Summe liest sich eine Oberfläche dadurch
+ * unfertig.
+ */
+export function plural(count: number, one: string, many: string): string {
+  return `${formatNumber(count)} ${count === 1 ? one : many}`;
 }
 
 export function formatBytes(bytes: number): string {

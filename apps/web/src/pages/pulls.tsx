@@ -32,6 +32,7 @@ import {
   Textarea,
   cx,
   formatNumber,
+  plural,
   relativeTime,
 } from '../components/ui.js';
 import { Avatar } from '../components/Shell.js';
@@ -268,11 +269,14 @@ export function NewPullPage({ repo }: { repo: RepositoryDetail }) {
 
         {compare && (
           <div className="pb-1 text-xs text-muted">
-            {compare.commits.length} Commits · {compare.stats.filesChanged} Dateien ·{' '}
+            {plural(compare.commits.length, 'Commit', 'Commits')} ·{' '}
+            {plural(compare.stats.filesChanged, 'Datei', 'Dateien')} ·{' '}
             <span className="text-success">+{compare.stats.additions}</span>{' '}
             <span className="text-danger">−{compare.stats.deletions}</span>
             {!compare.mergeable && (
-              <span className="ml-2 text-danger">Konflikte in {compare.conflictingFiles.length} Dateien</span>
+              <span className="ml-2 text-danger">
+                Konflikte in {plural(compare.conflictingFiles.length, 'Datei', 'Dateien')}
+              </span>
             )}
           </div>
         )}
@@ -309,7 +313,7 @@ export function NewPullPage({ repo }: { repo: RepositoryDetail }) {
           />
 
           {compare && compare.commits.length > 0 && (
-            <Panel title={`${compare.commits.length} Commits`} bodyClassName="divide-y divide-line">
+            <Panel title={plural(compare.commits.length, 'Commit', 'Commits')} bodyClassName="divide-y divide-line">
               {compare.commits.map((commit) => (
                 <div key={commit.oid} className="flex items-center gap-3 px-4 py-2 text-xs">
                   <code className="font-mono text-faint">{commit.shortOid}</code>
@@ -368,7 +372,7 @@ export function PullDetailPage({ repo }: { repo: RepositoryDetail }) {
           <StateBadge state={pr.state} kind="pull_request" merged={pr.merged} isDraft={pr.isDraft} />
           <span>
             {pr.author && <strong className="text-ink">{pr.author.username}</strong>} möchte{' '}
-            {pr.commitCount} Commits von{' '}
+            {pr.commitCount} {pr.commitCount === 1 ? 'Commit' : 'Commits'} von{' '}
             <code className="font-mono text-ink">{pr.head.branch}</code> nach{' '}
             <code className="font-mono text-ink">{pr.base.branch}</code> übernehmen
           </span>
@@ -1001,7 +1005,7 @@ function PullCommits({ pr, repo }: { pr: PullRequestDetail; repo: RepositoryDeta
   if (!commits) return <Spin />;
 
   return (
-    <Panel title={`${commits.length} Commits`} bodyClassName="divide-y divide-line">
+    <Panel title={plural(commits.length, 'Commit', 'Commits')} bodyClassName="divide-y divide-line">
       {commits.map((commit) => (
         <div key={commit.oid} className="flex items-center gap-3 px-4 py-2.5">
           <Avatar name={commit.author.name} size={22} />

@@ -585,10 +585,27 @@ function quoteWithSecretRefs(value: string): string {
 /**
  * Eingebaute Aktionen.
  *
- * `forge/checkout` ist bereits erledigt, bevor der Container startet, und
- * wird deshalb nur quittiert. `forge/upload-artifact` kopiert Dateien in das
- * Artefaktverzeichnis.
+ * Es gibt keinen Marktplatz und keine Ausführung fremden Codes: eine Aktion
+ * ist hier kein heruntergeladenes Repository, sondern eine feste Umsetzung im
+ * Runner. Das ist eine bewusste Einschränkung – fremder Code mit Zugriff auf
+ * Secrets und den Docker-Socket wäre ein erhebliches Risiko.
+ *
+ * Unterstützt werden die drei Aktionen, die in nahezu jedem Workflow stehen,
+ * jeweils unter ihrem GitHub-Namen und unter `forge/`. Eine aus GitHub
+ * übernommene Datei läuft damit unverändert.
+ *
+ * Die Version hinter `@` wird gelesen und ignoriert: `actions/checkout@v3`
+ * und `@v4` tun hier dasselbe.
  */
+const ACTION_ALIASES: Record<string, string> = {
+  'actions/checkout': 'checkout',
+  'forge/checkout': 'checkout',
+  'actions/upload-artifact': 'upload-artifact',
+  'forge/upload-artifact': 'upload-artifact',
+  'actions/setup-node': 'setup-node',
+  'forge/setup-node': 'setup-node',
+};
+
 async function executeAction(
   job: Job,
   step: JobStep,
@@ -596,14 +613,19 @@ async function executeAction(
   log: LogBuffer,
   deadline: number,
 ): Promise<RunResult> {
-  const action = step.uses!.split('@')[0]!;
+  const named = step.uses!.split('@')[0]!;
+  const action = ACTION_ALIASES[named] ?? named;
 
-  if (action === 'forge/checkout') {
+  if (action === 'checkout') {
     log.write('Der Quelltext wurde bereits vor dem Start des Containers ausgecheckt.\n');
     return { exitCode: 0, timedOut: false };
   }
 
-  if (action === 'forge/upload-artifact') {
+  if (action === 'setup-node') {
+    return setupNode(step, containerName, log, deadline);
+  }
+
+  if (action === 'upload-artifact') {
     const path = step.with.path ?? '.';
     const name = step.with.name ?? 'artifact';
     log.write(`Artefakt "${name}" wird aus ${path} gesammelt.\n`);
@@ -625,10 +647,100 @@ async function executeAction(
 
   log.write(
     `Die Aktion "${step.uses}" ist auf dieser Instanz nicht verfügbar.\n` +
-      'Unterstützt werden: forge/checkout, forge/upload-artifact.\n' +
-      'Nutze stattdessen einen "run"-Schritt.\n',
+      'Es gibt keinen Marktplatz: Aktionen sind fest im Runner umgesetzt.\n' +
+      'Unterstützt werden actions/checkout, actions/setup-node und\n' +
+      'actions/upload-artifact (auch unter forge/).\n' +
+      'Alles andere schreibst du als "run"-Schritt.\n',
   );
   return { exitCode: 1, timedOut: false };
+}
+
+/**
+ * Setzt eine bestimmte Node-Version im Container.
+ *
+ * Entspricht `actions/setup-node`: Ist die gewünschte Hauptversion schon
+ * vorhanden, passiert nichts. Sonst wird die offizielle Binärdistribution
+ * nach /usr/local entpackt – derselbe Weg, den die Vorlage bei GitHub geht.
+ *
+ * Dafür braucht der Container Netzzugang. Läuft der Job mit abgeschaltetem
+ * Netz, schlägt der Schritt mit einer Meldung fehl, die genau das sagt,
+ * statt mit einem rohen curl-Fehler.
+ */
+async function setupNode(
+  step: JobStep,
+  containerName: string,
+  log: LogBuffer,
+  deadline: number,
+): Promise<RunResult> {
+  const requested = String(step.with['node-version'] ?? '').trim();
+
+  if (!requested) {
+    log.write('Ohne "node-version" bleibt die Version des Images bestehen.\n');
+    return { exitCode: 0, timedOut: false };
+  }
+
+  // Nur die Hauptversion ist hier sinnvoll zu behandeln; Bereichsangaben wie
+  // ">=18" lassen sich ohne Auflösung gegen die Versionsliste nicht abbilden.
+  const major = /^\d+/.exec(requested)?.[0];
+  if (!major) {
+    log.write(
+      `Die Angabe "${requested}" wird nicht verstanden. Erwartet wird eine Versionsnummer wie 20 oder 20.11.1.\n`,
+    );
+    return { exitCode: 1, timedOut: false };
+  }
+
+  const timeoutMs = () => Math.max(deadline - Date.now(), 1000);
+
+  // runProcess sammelt keine Ausgabe, sondern reicht sie durch; für die
+  // Versionsabfrage wird sie hier eingefangen statt ins Protokoll geschrieben.
+  let versionOutput = '';
+  await runProcess(
+    'docker',
+    ['exec', containerName, '/usr/bin/sh', '-c', 'node --version 2>/dev/null || true'],
+    { timeoutMs: timeoutMs(), onOutput: (chunk) => (versionOutput += chunk) },
+  );
+
+  const installed = versionOutput.trim();
+  const current = /v(\d+)/.exec(installed)?.[1];
+  if (current === major) {
+    log.write(`Node ${installed} ist bereits vorhanden.\n`);
+    return { exitCode: 0, timedOut: false };
+  }
+
+  log.write(`Node ${requested} wird eingerichtet (vorhanden: ${installed || 'keines'}).\n`);
+
+  // exact=1 lädt genau diese Version, sonst die neueste der Hauptversion.
+  const exact = /^\d+\.\d+\.\d+$/.test(requested);
+  const script = exact
+    ? `V=${requested}`
+    : `V=$(curl -fsSL https://nodejs.org/dist/index.json | ` +
+      `grep -o '"version":"v${major}\\.[0-9.]*"' | head -1 | cut -d'"' -f4 | tr -d v)`;
+
+  const install = await runProcess(
+    'docker',
+    [
+      'exec',
+      containerName,
+      '/usr/bin/sh',
+      '-c',
+      `set -e; ${script}; ` +
+        `test -n "$V" || { echo "Keine passende Node-Version gefunden."; exit 1; }; ` +
+        `ARCH=$(uname -m); case "$ARCH" in x86_64) A=x64;; aarch64) A=arm64;; *) echo "Nicht unterstützte Architektur $ARCH"; exit 1;; esac; ` +
+        `curl -fsSL "https://nodejs.org/dist/v$V/node-v$V-linux-$A.tar.xz" | tar -xJ -C /usr/local --strip-components=1; ` +
+        `node --version`,
+    ],
+    { timeoutMs: timeoutMs(), onOutput: (chunk) => log.write(chunk) },
+  );
+
+  if (install.exitCode !== 0) {
+    log.write(
+      'Das Einrichten ist fehlgeschlagen. Häufigste Ursache: der Job läuft ohne\n' +
+        'Netzzugang, dann ist nodejs.org nicht erreichbar. Entweder Netz erlauben\n' +
+        'oder ein Image verwenden, in dem die Version schon steckt.\n',
+    );
+  }
+
+  return install;
 }
 
 /** Packt gesammelte Artefakte und lädt sie hoch. */

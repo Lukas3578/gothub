@@ -34,6 +34,12 @@ async function main(): Promise<void> {
       `(Cookies: SameSite=${config.security.cookie.sameSite}, Secure=${config.security.cookie.secure})`,
   );
 
+  // Die aufgelöste Adresse ins Protokoll: bei einer Datei ist der Pfad
+  // relativ zur Projektwurzel, und wer sie von Hand migriert hat, will sehen,
+  // ob es dieselbe Datei ist. Ein Token würde hier nicht auftauchen – es
+  // steht nicht in der Adresse.
+  app.log.info(`Datenbank: ${config.database.url}`);
+
   // Prüft den Git-Speicher und meldet einen flüchtigen Datenträger deutlich.
   // Läuft nach dem Start, damit ein Problem hier den Dienst nicht blockiert.
   void checkRepositoryStorage()

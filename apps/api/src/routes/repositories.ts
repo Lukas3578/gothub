@@ -4,7 +4,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, like, or, sql } from 'drizzle-orm';
 import { REPO_VISIBILITY, type Paginated, type RepositorySummary } from '@forge/shared';
 import { db } from '../db/index.js';
 import { namespaces, organizations, repositories, stars, users } from '../db/schema.js';
@@ -77,8 +77,8 @@ export async function registerRepositoryRoutes(app: FastifyInstance): Promise<vo
     if (query.q) {
       conditions.push(
         or(
-          ilike(repositories.name, `%${query.q}%`),
-          ilike(repositories.description, `%${query.q}%`),
+          like(repositories.name, `%${query.q}%`),
+          like(repositories.description, `%${query.q}%`),
         )!,
       );
     }
@@ -112,7 +112,7 @@ export async function registerRepositoryRoutes(app: FastifyInstance): Promise<vo
       .offset(offset);
 
     const totalRows = await db
-      .select({ total: sql<number>`count(*)::int` })
+      .select({ total: sql<number>`count(*)` })
       .from(repositories)
       .innerJoin(namespaces, eq(namespaces.id, repositories.ownerNamespaceId))
       .where(where);
@@ -373,7 +373,7 @@ export async function registerRepositoryRoutes(app: FastifyInstance): Promise<vo
       .offset((query.page - 1) * query.perPage);
 
     const totalRows = await db
-      .select({ total: sql<number>`count(*)::int` })
+      .select({ total: sql<number>`count(*)` })
       .from(repositories)
       .innerJoin(namespaces, eq(namespaces.id, repositories.ownerNamespaceId))
       .where(where);

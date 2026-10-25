@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { interpolate, parseWorkflow } from '../services/workflow-parser.js';
+import { WorkflowParseError, interpolate, parseWorkflow } from '../services/workflow-parser.js';
 
 describe('Ausdrucksauflösung', () => {
   it('setzt ein Secret nicht ein, sondern verweist auf die Umgebungsvariable', () => {
@@ -146,5 +146,110 @@ describe('Absicherung der Umgebungsdatei', () => {
   it('lässt normale Werte zu', () => {
     expect(isSafeEnvEntry('API_TOKEN', 'abc-123_XYZ')).toBe(true);
     expect(isSafeEnvEntry('_PRIVAT', 'wert mit leerzeichen')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GitHub-Kompatibilität
+// ---------------------------------------------------------------------------
+
+describe('GitHub-kompatible Workflows', () => {
+  it('nimmt eine unveränderte GitHub-Datei an', () => {
+    const parsed = parseWorkflow(
+      `
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npm test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bericht
+          path: coverage
+`,
+      '.github/workflows/ci.yml',
+    );
+
+    expect(parsed.name).toBe('CI');
+    expect(parsed.jobs).toHaveLength(1);
+    expect(parsed.jobs[0]!.steps).toHaveLength(5);
+    expect(parsed.jobs[0]!.steps[0]!.uses).toBe('actions/checkout@v4');
+    expect(parsed.jobs[0]!.image).toBe('forge/runner-base:latest');
+  });
+
+  it('weist eine Matrix ab, statt sie stillschweigend zu übergehen', () => {
+    // Ohne diese Prüfung liefe ein Job, der dreimal laufen soll, genau
+    // einmal – und niemand sähe, dass zwei Läufe fehlen.
+    let message = '';
+    try {
+      parseWorkflow(
+        `
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [18, 20, 22]
+    steps:
+      - run: node --version
+`,
+        '.github/workflows/matrix.yml',
+      );
+    } catch (error) {
+      message = error instanceof WorkflowParseError ? [error.message, ...error.details].join(' ') : String(error);
+    }
+
+    expect(message).toContain('strategy');
+    expect(message).toContain('nicht unterstützt');
+  });
+
+  it('weist Begleitcontainer und Job-Voreinstellungen ab', () => {
+    for (const key of ['services', 'defaults', 'outputs']) {
+      let message = '';
+      try {
+        parseWorkflow(
+          `on: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    ${key}:\n      x: y\n    steps:\n      - run: echo\n`,
+          'w.yml',
+        );
+      } catch (error) {
+        message =
+          error instanceof WorkflowParseError ? [error.message, ...error.details].join(' ') : String(error);
+      }
+      expect(message, `${key} sollte abgewiesen werden`).toContain(key);
+    }
+  });
+
+  it('lässt unterstützte Schlüssel unangetastet durch', () => {
+    const parsed = parseWorkflow(
+      `
+on:
+  workflow_dispatch:
+jobs:
+  bauen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: 'true'
+    steps:
+      - run: make
+        working-directory: ./app
+        continue-on-error: true
+`,
+      'w.yml',
+    );
+
+    expect(parsed.jobs[0]!.timeoutMinutes).toBe(30);
+    expect(parsed.jobs[0]!.steps[0]!.workingDirectory).toBe('./app');
   });
 });
