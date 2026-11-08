@@ -2,7 +2,10 @@
  * Zusammenbau der Fastify-Anwendung.
  */
 
-import Fastify, { type FastifyInstance } from 'fastify';
+import { createReadStream, existsSync, statSync } from 'node:fs';
+import { extname, join as joinPath, normalize as normalizePath, resolve as resolvePath, sep as pathSep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import Fastify, { type FastifyInstance, type FastifyReply } from 'fastify';
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -22,6 +25,7 @@ import { registerPullRequestRoutes } from './routes/pull-requests.js';
 import { registerBranchProtectionRoutes } from './routes/branch-protection.js';
 import { registerOrganizationRoutes } from './routes/organizations.js';
 import { registerReleaseRoutes } from './routes/releases.js';
+import { registerGithubCompatRoutes } from './routes/github-compat.js';
 import { registerSearchRoutes } from './routes/search.js';
 import { registerWorkflowRoutes } from './routes/workflows.js';
 import { registerRunnerRoutes } from './routes/runner.js';
@@ -53,6 +57,12 @@ export async function buildApp(): Promise<FastifyInstance> {
     trustProxy: config.isProduction,
     // Erlaubt URLs wie /api/v1/repos/:owner/:repo/compare/a...b
     ignoreTrailingSlash: true,
+    // Klon-Adressen wie bei GitHub (https://<host>/<owner>/<repo>.git) zeigen auf
+    // denselben Git-Endpunkt wie /git/<owner>/<repo>.git.
+    rewriteUrl: (request) => {
+      const url = request.url ?? '/';
+      return /^\/[^/?]+\/[^/?]+\.git(\/|\?|$)/.test(url) && !url.startsWith('/git/') ? `/git${url}` : url;
+    },
   });
 
   // -- Sicherheitsheader ----------------------------------------------------
@@ -169,7 +179,14 @@ export async function buildApp(): Promise<FastifyInstance> {
     return reply.code(500).send(body);
   });
 
+  // Ein-Host-Betrieb: Liefert die API auch die gebaute Oberfläche aus, reicht eine
+  // einzige Adresse (z. B. https://git.example.com) für Web, API, Git und Downloads.
+  const webDist = resolveWebDist();
+
   app.setNotFoundHandler((request, reply) => {
+    if (webDist && (request.method === 'GET' || request.method === 'HEAD') && !/^\/(api|git|npm|internal)(\/|$)/.test(request.url)) {
+      return serveWeb(webDist, request.url, reply);
+    }
     reply.code(404).send({
       error: { code: 'not_found', message: `Kein Endpunkt für ${request.method} ${request.url}.` },
     });
@@ -211,6 +228,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerBranchProtectionRoutes(app);
   await registerOrganizationRoutes(app);
   await registerReleaseRoutes(app);
+  await registerGithubCompatRoutes(app);
   await registerSearchRoutes(app);
   await registerWorkflowRoutes(app);
   await registerRunnerRoutes(app);
@@ -227,4 +245,54 @@ export async function buildApp(): Promise<FastifyInstance> {
   await registerGitHttpRoutes(app);
 
   return app;
+}
+
+// ---------------------------------------------------------------------------
+// Oberfläche aus derselben Adresse ausliefern (optional)
+// ---------------------------------------------------------------------------
+
+const WEB_TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.ico': 'image/x-icon',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.txt': 'text/plain; charset=utf-8', '.webmanifest': 'application/manifest+json',
+};
+
+/** Ordner mit der gebauten Oberfläche: WEB_DIST_DIR oder apps/web/dist. SERVE_WEB=false schaltet es ab. */
+function resolveWebDist(): string | null {
+  if (process.env.SERVE_WEB === 'false') return null;
+  const dir = process.env.WEB_DIST_DIR ? resolvePath(process.env.WEB_DIST_DIR) : fileURLToPath(new URL('../../web/dist', import.meta.url));
+  return existsSync(joinPath(dir, 'index.html')) ? dir : null;
+}
+
+function serveWeb(root: string, url: string, reply: FastifyReply) {
+  let pathname = '/';
+  try {
+    pathname = decodeURIComponent(url.split('?')[0]!.split('#')[0]!);
+  } catch {
+    /* kaputte Kodierung: index.html */
+  }
+  let file = pathname.includes('\0') ? null : resolvePath(root, `.${normalizePath(pathname)}`);
+  if (file && file !== root && !file.startsWith(root + pathSep)) file = null;
+  let isIndex = false;
+  if (!file || !existsSync(file) || !statSync(file).isFile()) {
+    // Pfade mit Dateiendung, die es nicht gibt, sind echte 404 – sonst bekäme ein fehlendes
+    // Bundle HTML statt eines Fehlers.
+    if (/\.[a-z0-9]{2,5}$/i.test(pathname) && !pathname.endsWith('.html')) {
+      return reply.code(404).send({ error: { code: 'not_found', message: 'Datei nicht gefunden.' } });
+    }
+    file = joinPath(root, 'index.html');
+    isIndex = true;
+  }
+  const type = WEB_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream';
+  reply
+    .header('Content-Type', type)
+    .header('Cache-Control', isIndex || type.startsWith('text/html') ? 'no-cache' : /[.-][A-Za-z0-9_-]{8,}\.(js|css|woff2?)$/.test(file) ? 'public, max-age=31536000, immutable' : 'public, max-age=3600')
+    // Die Oberfläche braucht eine eigene CSP (die der API verbietet alles).
+    .header(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    )
+    .header('Cross-Origin-Resource-Policy', 'same-origin');
+  return reply.code(200).send(createReadStream(file));
 }

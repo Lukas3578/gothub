@@ -623,6 +623,12 @@ function resolveValue(token: string, variables: Record<string, string>): string 
 export function interpolate(text: string, variables: Record<string, string>): string {
   return text.replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (match, expression: string) => {
     const key = expression.trim();
+    // GitHub stellt jedem Lauf automatisch ein Token bereit (github.token bzw.
+    // secrets.GITHUB_TOKEN). Hier übernimmt diese Rolle das Repository-Secret
+    // FORGE_TOKEN, sodass übernommene Workflows ohne Änderung ein Token haben.
+    if (key === 'github.token' || key === 'secrets.GITHUB_TOKEN') {
+      return '${FORGE_SECRET_FORGE_TOKEN}';
+    }
     if (key.startsWith('secrets.')) {
       // Der Platzhalter bleibt stehen; die Shell löst ihn aus der Umgebung auf.
       return `\${${key.replace('secrets.', 'FORGE_SECRET_')}}`;

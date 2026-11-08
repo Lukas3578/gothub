@@ -1,0 +1,304 @@
+#!/usr/bin/env python3
+"""
+Kleiner Ersatz fuer die GitHub-CLI "gh" in Workflows auf gothub/Forge.
+
+Unterstuetzt die Befehle, die typische Release-Workflows benutzen:
+  gh release view     <tag> [--json felder] [--jq ausdruck]
+  gh release create   <tag> [dateien...] [--title t] [--notes n | --notes-file f]
+                      [--target sha] [--prerelease] [--draft] [--latest[=false]]
+  gh release edit     <tag> [--title t] [--notes n | --notes-file f]
+                      [--prerelease[=false]] [--draft[=false]] [--latest[=false]]
+  gh release upload   <tag> <dateien...> [--clobber]
+  gh release download [tag] [--pattern glob]... [--dir d] [--clobber]
+  gh release delete   <tag> [--yes] [--cleanup-tag]
+  gh release list     [--limit n]
+  gh api <pfad> [-X methode] [-f k=v]... [--jq ausdruck]
+Ueberall: --repo owner/repo (sonst GITHUB_REPOSITORY).
+
+Adresse: FORGE_RUNNER_API_URL (lokal, setzt der Runner) > GITHUB_SERVER_URL > FORGE_HOST.
+Token:   GH_TOKEN > GITHUB_TOKEN > FORGE_TOKEN > FORGE_SECRET_FORGE_TOKEN.
+Alte Repo-Namen "Marcinator31/..." werden auf den Besitzer dieses Repos umgebogen
+(oder FORGE_DEFAULT_OWNER).
+--jq braucht das Programm jq; fehlt es, wird das JSON unveraendert ausgegeben.
+"""
+import fnmatch, json, os, shutil, subprocess, sys, urllib.error, urllib.parse, urllib.request
+
+HOST = (os.environ.get("FORGE_RUNNER_API_URL") or os.environ.get("GITHUB_SERVER_URL")
+        or os.environ.get("FORGE_HOST") or "https://git.vortexpvp.eu").rstrip("/")
+API = HOST + "/api/v3"
+UPLOADS = HOST + "/api/uploads"
+TOKEN = next((os.environ[k].strip() for k in ("GH_TOKEN", "GITHUB_TOKEN", "FORGE_TOKEN", "FORGE_SECRET_FORGE_TOKEN")
+              if os.environ.get(k, "").strip()), "")
+OLD_OWNERS = {"marcinator31"}
+
+
+def die(msg, code=1):
+    print(f"gh (gothub): {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def fix_repo(repo):
+    if not repo:
+        repo = os.environ.get("GITHUB_REPOSITORY", "")
+    if "/" not in repo:
+        die("Repo unbekannt (--repo owner/repo oder GITHUB_REPOSITORY).")
+    owner, name = repo.split("/", 1)
+    if owner.lower() in OLD_OWNERS:
+        new_owner = os.environ.get("FORGE_DEFAULT_OWNER") or os.environ.get("GITHUB_REPOSITORY", "/").split("/")[0]
+        if new_owner:
+            owner = new_owner
+    return f"{owner}/{name}"
+
+
+def http(method, url, body=None, raw=None, accept=None, ok404=False):
+    headers = {"User-Agent": "gh-forge-shim", "Accept": accept or "application/vnd.github+json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
+    data = None
+    if raw is not None:
+        data = raw
+        headers["Content-Type"] = "application/octet-stream"
+    elif body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url if url.startswith("http") else API + url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=600) as res:
+            payload = res.read()
+            if accept == "application/octet-stream":
+                return payload
+            return json.loads(payload) if payload else None
+    except urllib.error.HTTPError as e:
+        if e.code == 404 and ok404:
+            return None
+        die(f"HTTP {e.code} bei {method} {url}: {e.read().decode('utf8', 'replace')[:300]}")
+
+
+def parse(argv, flags_with_value, bool_flags=()):
+    """Sehr kleiner Argument-Parser: --x wert, --x=wert, -X wert, Positionsargumente."""
+    pos, opt = [], {}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a.startswith("-") and a != "-":
+            key, _, val = a.partition("=")
+            if key in flags_with_value:
+                if not _:
+                    i += 1
+                    val = argv[i] if i < len(argv) else ""
+                opt.setdefault(key, []).append(val)
+            elif key in bool_flags:
+                opt[key] = [val if _ else "true"]
+            else:
+                opt[key] = [val if _ else "true"]
+        else:
+            pos.append(a)
+        i += 1
+    return pos, opt
+
+
+def jq_out(data, expr):
+    text = json.dumps(data)
+    if expr:
+        if shutil.which("jq"):
+            r = subprocess.run(["jq", "-r", expr], input=text, capture_output=True, text=True)
+            sys.stdout.write(r.stdout)
+            if r.returncode:
+                sys.stderr.write(r.stderr)
+                sys.exit(r.returncode)
+            return
+        print("gh (gothub): jq fehlt, gebe JSON ungefiltert aus", file=sys.stderr)
+    print(text)
+
+
+def truthy(v):
+    return str(v).lower() not in ("false", "0", "no")
+
+
+def release_by_tag(repo, tag):
+    return http("GET", f"/repos/{repo}/releases/tags/{urllib.parse.quote(tag, safe='')}", ok404=True)
+
+
+def notes_from(opt):
+    if "--notes-file" in opt:
+        f = opt["--notes-file"][-1]
+        return sys.stdin.read() if f == "-" else open(f, encoding="utf8").read()
+    if "--notes" in opt:
+        return opt["--notes"][-1]
+    return None
+
+
+def upload(repo, rel, files, clobber=True):
+    existing = {a["name"]: a for a in rel.get("assets", [])}
+    for f in files:
+        path, _, label = f.partition("#")
+        name = os.path.basename(path)
+        if name in existing:
+            if not clobber:
+                die(f"{name} gibt es schon im Release (--clobber zum Ersetzen).")
+            http("DELETE", f"/repos/{repo}/releases/assets/{existing[name]['id']}")
+        with open(path, "rb") as fh:
+            data = fh.read()
+        url = f"{UPLOADS}/repos/{repo}/releases/{rel['id']}/assets?name={urllib.parse.quote(name)}"
+        if label:
+            url += f"&label={urllib.parse.quote(label)}"
+        http("POST", url, raw=data)
+        print(f"hochgeladen: {name}")
+
+
+VALUE_FLAGS = {"--repo", "-R", "--title", "-t", "--notes", "-n", "--notes-file", "-F", "--target", "--json", "--jq", "-q",
+               "--pattern", "-p", "--dir", "-D", "--limit", "-L", "-X", "--method", "-f", "--field", "-F", "--raw-field",
+               "-H", "--header"}
+
+
+def cmd_release(argv):
+    if not argv:
+        die("gh release <view|create|edit|upload|download|delete|list>")
+    sub, rest = argv[0], argv[1:]
+    pos, opt = parse(rest, VALUE_FLAGS)
+    repo = fix_repo((opt.get("--repo") or opt.get("-R") or [""])[-1])
+    if "-t" in opt: opt["--title"] = opt["-t"]
+    if "-n" in opt: opt["--notes"] = opt["-n"]
+    if "-F" in opt and sub != "api": opt["--notes-file"] = opt["-F"]
+
+    if sub == "view":
+        rel = release_by_tag(repo, pos[0]) if pos else http("GET", f"/repos/{repo}/releases/latest", ok404=True)
+        if not rel:
+            die("release not found")
+        if "--json" in opt:
+            fields = [f.strip() for f in opt["--json"][-1].split(",") if f.strip()]
+            mapping = {"tagName": "tag_name", "isPrerelease": "prerelease", "isDraft": "draft", "publishedAt": "published_at",
+                       "createdAt": "created_at", "url": "html_url", "name": "name", "body": "body", "assets": "assets", "id": "id"}
+            out = {f: rel.get(mapping.get(f, f)) for f in fields}
+            jq_out(out, (opt.get("--jq") or opt.get("-q") or [""])[-1])
+        else:
+            print(f"title:\t{rel.get('name')}\ntag:\t{rel.get('tag_name')}\nprerelease:\t{rel.get('prerelease')}")
+            for a in rel.get("assets", []):
+                print(f"asset:\t{a['name']}")
+        return
+
+    if sub == "list":
+        limit = int((opt.get("--limit") or opt.get("-L") or ["30"])[-1])
+        for r in http("GET", f"/repos/{repo}/releases?per_page={min(limit, 100)}") or []:
+            kind = "Draft" if r.get("draft") else "Pre-release" if r.get("prerelease") else ""
+            print(f"{r.get('name')}\t{kind}\t{r.get('tag_name')}\t{r.get('published_at') or ''}")
+        return
+
+    if sub == "create":
+        if not pos:
+            die("Tag fehlt")
+        tag, files = pos[0], pos[1:]
+        if release_by_tag(repo, tag):
+            die(f"Release {tag} gibt es schon (a release with the same tag name already exists).")
+        body = {"tag_name": tag, "name": (opt.get("--title") or [tag])[-1], "body": notes_from(opt) or "",
+                "prerelease": "--prerelease" in opt and truthy(opt["--prerelease"][-1]),
+                "draft": "--draft" in opt and truthy(opt["--draft"][-1])}
+        if "--target" in opt:
+            body["target_commitish"] = opt["--target"][-1]
+        if "--latest" in opt:
+            body["make_latest"] = "true" if truthy(opt["--latest"][-1]) else "false"
+        rel = http("POST", f"/repos/{repo}/releases", body=body)
+        print(rel.get("html_url", tag))
+        if files:
+            upload(repo, rel, files)
+        return
+
+    if sub == "edit":
+        rel = release_by_tag(repo, pos[0]) if pos else None
+        if not rel:
+            die("release not found")
+        patch = {}
+        if "--title" in opt: patch["name"] = opt["--title"][-1]
+        n = notes_from(opt)
+        if n is not None: patch["body"] = n
+        if "--prerelease" in opt: patch["prerelease"] = truthy(opt["--prerelease"][-1])
+        if "--draft" in opt: patch["draft"] = truthy(opt["--draft"][-1])
+        if "--latest" in opt: patch["make_latest"] = "true" if truthy(opt["--latest"][-1]) else "false"
+        if patch:
+            http("PATCH", f"/repos/{repo}/releases/{rel['id']}", body=patch)
+        return
+
+    if sub == "upload":
+        if len(pos) < 2:
+            die("gh release upload <tag> <dateien...>")
+        rel = release_by_tag(repo, pos[0])
+        if not rel:
+            die("release not found")
+        upload(repo, rel, pos[1:], clobber="--clobber" in opt)
+        return
+
+    if sub == "download":
+        rel = release_by_tag(repo, pos[0]) if pos else http("GET", f"/repos/{repo}/releases/latest", ok404=True)
+        if not rel:
+            die("release not found")
+        patterns = (opt.get("--pattern") or []) + (opt.get("-p") or [])
+        target = (opt.get("--dir") or opt.get("-D") or ["."])[-1]
+        os.makedirs(target, exist_ok=True)
+        n = 0
+        for a in rel.get("assets", []):
+            if patterns and not any(fnmatch.fnmatch(a["name"], p) for p in patterns):
+                continue
+            dest = os.path.join(target, a["name"])
+            if os.path.exists(dest) and "--clobber" not in opt and "--skip-existing" not in opt:
+                die(f"{dest} existiert schon (--clobber)")
+            if os.path.exists(dest) and "--skip-existing" in opt:
+                continue
+            data = http("GET", f"/repos/{repo}/releases/assets/{a['id']}", accept="application/octet-stream")
+            with open(dest, "wb") as fh:
+                fh.write(data)
+            n += 1
+        if n == 0:
+            die("no assets match the file pattern")
+        return
+
+    if sub == "delete":
+        rel = release_by_tag(repo, pos[0]) if pos else None
+        if not rel:
+            die("release not found")
+        http("DELETE", f"/repos/{repo}/releases/{rel['id']}")
+        return
+
+    die(f"gh release {sub} wird hier nicht unterstuetzt")
+
+
+def cmd_api(argv):
+    pos, opt = parse(argv, VALUE_FLAGS)
+    if not pos:
+        die("gh api <pfad>")
+    path = pos[0]
+    if not path.startswith("/") and not path.startswith("http"):
+        path = "/" + path
+    repo_env = os.environ.get("GITHUB_REPOSITORY", "")
+    path = path.replace("{owner}", repo_env.split("/")[0]).replace("{repo}", repo_env.split("/")[-1])
+    if path.startswith("/repos/"):
+        parts = path.split("/")
+        if len(parts) > 3:
+            fixed = fix_repo(f"{parts[2]}/{parts[3]}")
+            path = "/repos/" + fixed + ("/" + "/".join(parts[4:]) if len(parts) > 4 else "")
+    method = (opt.get("-X") or opt.get("--method") or [None])[-1]
+    fields = {}
+    for kv in (opt.get("-f") or []) + (opt.get("--raw-field") or []) + (opt.get("--field") or []):
+        k, _, v = kv.partition("=")
+        fields[k] = v
+    method = method or ("POST" if fields else "GET")
+    data = http(method, path, body=fields if fields else None)
+    jq_out(data, (opt.get("--jq") or opt.get("-q") or [""])[-1])
+
+
+def main():
+    argv = sys.argv[1:]
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    if argv[0] == "release":
+        return cmd_release(argv[1:])
+    if argv[0] == "api":
+        return cmd_api(argv[1:])
+    if argv[0] == "auth" and argv[1:2] == ["status"]:
+        print("gothub: Token " + ("gesetzt" if TOKEN else "fehlt"))
+        return
+    die(f"Befehl '{argv[0]}' wird von diesem gh-Ersatz nicht unterstuetzt.")
+
+
+if __name__ == "__main__":
+    main()

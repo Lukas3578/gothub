@@ -33,6 +33,7 @@ import {
   workflowSteps,
   workflows,
 } from '../db/schema.js';
+import { config } from '../config.js';
 import { notFound, validationFailed } from '../lib/errors.js';
 import { decryptSecret } from '../lib/crypto.js';
 import { listTree, readBlob, resolveRef } from '../git/repository.js';
@@ -487,6 +488,7 @@ export async function claimJob(
   runnerId: string,
   labels: string[],
   leaseSeconds = 120,
+  scope: { repositoryId?: string | null; organizationId?: string | null } = {},
 ): Promise<JobAssignment | null> {
   // Zeitstempel liegen als Millisekunden seit Epoche in der Datenbank; in
   // rohem SQL muss die Zahl übergeben werden, nicht das Date-Objekt.
@@ -496,6 +498,13 @@ export async function claimJob(
   // Die Labels des Runners als JSON-Array. `json_each` zerlegt es in Zeilen,
   // sodass sich die Schnittmenge mit den geforderten Labels bilden lässt.
   const labelsJson = JSON.stringify(labels);
+
+  // Geltungsbereich des Runners: ein Repository- oder Organisations-Runner
+  // darf nur Jobs aus seinem eigenen Bereich übernehmen. Ohne diese Grenze
+  // könnte jedes fremde Repository Code auf dem Rechner dieses Runners
+  // ausführen – bei einem Runner im Host-Modus wäre das der ganze Server.
+  const repositoryScope = scope.repositoryId ?? null;
+  const organizationScope = scope.organizationId ?? null;
 
   const claimed = await db.all<{ id: string; run_id: string }>(sql`
     UPDATE workflow_jobs
@@ -510,6 +519,16 @@ export async function claimJob(
         JOIN workflow_runs r ON r.id = j.run_id
         WHERE j.status = 'queued'
           AND r.status IN ('queued', 'running')
+          AND (${repositoryScope} IS NULL OR r.repository_id = ${repositoryScope})
+          AND (
+            ${organizationScope} IS NULL
+            OR r.repository_id IN (
+              SELECT repo.id
+              FROM repositories repo
+              JOIN organizations org ON org.namespace_id = repo.owner_namespace_id
+              WHERE org.id = ${organizationScope}
+            )
+          )
           AND (
             json_array_length(j.required_labels) = 0
             OR EXISTS (
@@ -607,6 +626,20 @@ async function buildAssignment(jobId: string, runId: string): Promise<JobAssignm
     FORGE_EVENT: run.event,
     FORGE_JOB: job.jobKey,
     CI: 'true',
+    // GitHub-kompatible Namen, damit übernommene Workflows und Skripte
+    // unverändert laufen.
+    GITHUB_ACTIONS: 'true',
+    GITHUB_REPOSITORY: fullName,
+    GITHUB_REPOSITORY_OWNER: repoRow.ownerName,
+    GITHUB_SHA: run.headSha,
+    GITHUB_REF: run.headBranch ? `refs/heads/${run.headBranch}` : run.headSha,
+    GITHUB_REF_NAME: run.headBranch ?? run.headSha,
+    GITHUB_RUN_NUMBER: String(run.runNumber),
+    GITHUB_RUN_ATTEMPT: String(run.runAttempt),
+    GITHUB_EVENT_NAME: run.event,
+    GITHUB_JOB: job.jobKey,
+    GITHUB_SERVER_URL: config.server.publicWebUrl,
+    GITHUB_API_URL: `${config.server.publicApiUrl}/api/v3`,
   };
 
   /**
@@ -628,6 +661,17 @@ async function buildAssignment(jobId: string, runId: string): Promise<JobAssignm
     'forge.run_attempt': String(run.runAttempt),
     'forge.job': job.jobKey,
     'forge.actor': run.triggeredById ?? '',
+    'github.repository': fullName,
+    'github.repository_owner': repoRow.ownerName,
+    'github.sha': run.headSha,
+    'github.ref': run.headBranch ? `refs/heads/${run.headBranch}` : run.headSha,
+    'github.ref_name': run.headBranch ?? run.headSha,
+    'github.event_name': run.event,
+    'github.run_number': String(run.runNumber),
+    'github.run_attempt': String(run.runAttempt),
+    'github.job': job.jobKey,
+    'github.server_url': config.server.publicWebUrl,
+    'github.api_url': `${config.server.publicApiUrl}/api/v3`,
   };
 
   const expand = (value: string | null | undefined): string | null =>

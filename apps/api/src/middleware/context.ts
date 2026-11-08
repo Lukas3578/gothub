@@ -77,6 +77,9 @@ export const contextPlugin = fp(async (app: FastifyInstance) => {
 
       if (authHeader.startsWith('Bearer ')) {
         token = authHeader.slice(7).trim();
+      } else if (/^token /i.test(authHeader)) {
+        // GitHub-Schreibweise "Authorization: token <token>" (GitHub-kompatible API).
+        token = authHeader.slice(6).trim();
       } else if (authHeader.startsWith('Basic ')) {
         // Git sendet Benutzername:Token. Der Benutzername wird nicht geprüft –
         // das Token identifiziert den Account eindeutig.
