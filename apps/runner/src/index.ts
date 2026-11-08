@@ -1196,18 +1196,24 @@ async function executeHostAction(
         return { exitCode: 1, timedOut: false };
       }
       // Version auflösen: neueste stabile Version mit passendem Präfix.
-      const pick =
+      // Genaue Version (1.23.4) direkt nehmen; sonst die neueste stabile mit
+      // passendem Präfix aus der VOLLSTÄNDIGEN Liste (include=all). Die kurze
+      // Liste von go.dev enthält nur die letzten zwei Hauptversionen.
+      const exactGo = /^\d+\.\d+\.\d+$/.test(requested);
+      const pattern =
         requested === 'stable'
-          ? `grep -o '"version": *"go[0-9.]*"' | head -1`
-          : `grep -o '"version": *"go${requested.replace(/\./g, '\\.')}[0-9.]*"' | head -1`;
-      let resolved = '';
-      const lookup = await hostSh(
-        host,
-        `curl -fsSL 'https://go.dev/dl/?mode=json' | ${pick} | grep -o 'go[0-9.]*'`,
-        log,
-        deadline,
-        (chunk) => (resolved += chunk),
-      );
+          ? `"version": *"go[0-9]+\\.[0-9]+(\\.[0-9]+)?"`
+          : `"version": *"go${requested.replace(/\./g, '\\.')}(\\.[0-9]+)*"`;
+      let resolved = exactGo ? `go${requested}` : '';
+      const lookup = exactGo
+        ? ok
+        : await hostSh(
+            host,
+            `curl -fsSL 'https://go.dev/dl/?mode=json&include=all' | grep -oE '${pattern}' | head -1 | grep -oE 'go[0-9.]+'`,
+            log,
+            deadline,
+            (chunk) => (resolved += chunk),
+          );
       const goVersion = resolved.trim();
       if (lookup.exitCode !== 0 || !goVersion) {
         log.write(`Keine Go-Version zu "${requested}" gefunden (go.dev erreichbar?).\n`);
