@@ -19,12 +19,26 @@
  * Secrets gelangen über eine Datei in den Container, die als Umgebung geladen
  * wird – nicht über die Kommandozeile, weil Kommandozeilen anderer Prozesse
  * auf demselben Host lesbar sind.
+ *
+ * Host-Modus (FORGE_RUNNER_MODE=host):
+ *  Für Server ohne Docker (etwa ein code-server-Container) führt der Runner
+ *  die Schritte direkt auf dem Rechner aus, jeweils in einem frischen
+ *  Arbeitsverzeichnis. Das ist KEINE Isolation: der Workflow-Code läuft mit
+ *  den Rechten des Runner-Prozesses. Deshalb gilt im Host-Modus:
+ *   - FORGE_RUNNER_ALLOWED_OWNERS ist Pflicht; Jobs anderer Besitzer werden
+ *     abgelehnt, bevor auch nur geklont wird.
+ *   - Der Runner sollte an ein Repository oder eine Organisation gebunden
+ *     registriert werden (der Server vergibt dann nur deren Jobs).
+ *   - Die Umgebung des Runners (inklusive seines Tokens) wird nicht an die
+ *     Schritte weitergereicht, nur eine kleine Auswahl wie PATH und HOME.
+ *  Unterstützt werden GITHUB_ENV, GITHUB_PATH, GITHUB_OUTPUT sowie die
+ *  Aktionen checkout, upload-artifact, setup-node, setup-java und setup-go.
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm, writeFile, mkdir, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readdir, stat, readFile, access } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -45,8 +59,32 @@ const PIDS_LIMIT = process.env.FORGE_RUNNER_PIDS ?? '256';
 const NETWORK_MODE = process.env.FORGE_RUNNER_NETWORK ?? 'bridge';
 const POLL_INTERVAL_MS = Number(process.env.FORGE_RUNNER_POLL_MS ?? 3000);
 
+/** "docker" (Standard, isoliert) oder "host" (direkt auf dem Rechner). */
+const MODE: 'docker' | 'host' = process.env.FORGE_RUNNER_MODE === 'host' ? 'host' : 'docker';
+
+/**
+ * Besitzer (Benutzer oder Organisationen), deren Jobs dieser Runner annimmt.
+ * Leer bedeutet: alle – im Host-Modus nicht erlaubt.
+ */
+const ALLOWED_OWNERS = (process.env.FORGE_RUNNER_ALLOWED_OWNERS ?? '')
+  .split(',')
+  .map((owner) => owner.trim().toLowerCase())
+  .filter(Boolean);
+
+/** Ablage für heruntergeladene Werkzeuge (JDK, Go, Node) im Host-Modus. */
+const TOOL_CACHE =
+  process.env.FORGE_RUNNER_TOOL_CACHE ?? join(homedir(), '.forge-runner', 'tools');
+
 if (!TOKEN) {
   console.error('FORGE_RUNNER_TOKEN ist nicht gesetzt. Der Runner kann sich nicht anmelden.');
+  process.exit(1);
+}
+
+if (MODE === 'host' && ALLOWED_OWNERS.length === 0) {
+  console.error(
+    'Im Host-Modus muss FORGE_RUNNER_ALLOWED_OWNERS gesetzt sein (z. B. "vortex"),\n' +
+      'sonst könnte jedes Repository der Instanz Code auf diesem Rechner ausführen.',
+  );
   process.exit(1);
 }
 
@@ -122,18 +160,50 @@ interface RunResult {
 function runProcess(
   command: string,
   args: string[],
-  options: { timeoutMs?: number; onOutput?: (chunk: string) => void; cwd?: string } = {},
+  options: {
+    timeoutMs?: number;
+    onOutput?: (chunk: string) => void;
+    cwd?: string;
+    /** Vollständige Umgebung; ohne Angabe die des Runners. */
+    env?: NodeJS.ProcessEnv;
+    /**
+     * Eigene Prozessgruppe und beim Abbruch die ganze Gruppe beenden. Nötig im
+     * Host-Modus, damit etwa ein Gradle-Daemon nicht weiterläuft.
+     */
+    processGroup?: boolean;
+    /** Abbruch von außen (Lauf wurde abgebrochen). */
+    signal?: AbortSignal;
+  } = {},
 ): Promise<RunResult> {
   return new Promise((resolvePromise) => {
-    const child = spawn(command, args, { cwd: options.cwd, shell: false });
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      shell: false,
+      env: options.env,
+      detached: options.processGroup === true,
+    });
     let timedOut = false;
+
+    const kill = () => {
+      try {
+        if (options.processGroup && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+    };
 
     const timer = options.timeoutMs
       ? setTimeout(() => {
           timedOut = true;
-          child.kill('SIGKILL');
+          kill();
         }, options.timeoutMs)
       : null;
+
+    if (options.signal) {
+      if (options.signal.aborted) kill();
+      else options.signal.addEventListener('abort', kill, { once: true });
+    }
 
     const forward = (chunk: Buffer) => options.onOutput?.(chunk.toString('utf8'));
     child.stdout.on('data', forward);
@@ -252,6 +322,8 @@ async function executeJob(job: Job): Promise<void> {
 
   let heartbeat: NodeJS.Timeout | null = null;
   let cancelled = false;
+  const abort = new AbortController();
+  let host: HostContext | null = null;
 
   heartbeat = setInterval(async () => {
     try {
@@ -260,8 +332,9 @@ async function executeJob(job: Job): Promise<void> {
       );
       if (!result.continue) {
         cancelled = true;
-        // Der Lauf wurde abgebrochen: Container sofort beenden.
-        void runProcess('docker', ['kill', containerName]);
+        // Der Lauf wurde abgebrochen: Container bzw. Prozesse sofort beenden.
+        abort.abort();
+        if (MODE === 'docker') void runProcess('docker', ['kill', containerName]);
       }
     } catch {
       // Ein verpasstes Lebenszeichen ist nicht sofort kritisch; der Server
@@ -277,7 +350,9 @@ async function executeJob(job: Job): Promise<void> {
     if (heartbeat) clearInterval(heartbeat);
     await log.flush();
 
-    await runProcess('docker', ['rm', '-f', containerName]).catch(() => {});
+    if (MODE === 'docker') {
+      await runProcess('docker', ['rm', '-f', containerName]).catch(() => {});
+    }
     await rm(workspace, { recursive: true, force: true }).catch(() => {});
 
     await api(`/api/v1/runner/jobs/${job.jobId}/complete`, { status, exitCode, errorMessage }).catch(
@@ -288,13 +363,28 @@ async function executeJob(job: Job): Promise<void> {
   try {
     log.write(`Job "${job.name}" auf Runner gestartet.\n`);
     log.write(`Repository: ${job.repositoryFullName} @ ${job.headSha.slice(0, 8)}\n`);
-    log.write(`Image: ${job.image}\n\n`);
+    log.write(MODE === 'host' ? 'Modus: Host (ohne Container)\n\n' : `Image: ${job.image}\n\n`);
+
+    // Besitzerprüfung VOR dem Klonen: ein fremder Job soll hier gar nichts tun.
+    const owner = job.repositoryFullName.split('/')[0]!.toLowerCase();
+    if (ALLOWED_OWNERS.length > 0 && !ALLOWED_OWNERS.includes(owner)) {
+      log.write(
+        `Dieser Runner nimmt nur Jobs von ${ALLOWED_OWNERS.join(', ')} an, nicht von "${owner}".\n`,
+      );
+      await finish('failure', null, 'Besitzer für diesen Runner nicht freigegeben.');
+      return;
+    }
 
     // ---- Quelltext holen ---------------------------------------------------
     log.setStep(null);
     log.write('→ Quelltext wird geklont…\n');
 
-    const cloneUrl = job.cloneUrl.replace('://', `://runner:${TOKEN}@`);
+    // Ältere Server liefern eine relative Klon-Adresse.
+    // Immer über die Adresse klonen, unter der dieser Runner die API erreicht
+    // (meist lokal): spart den Umweg über Proxy/Tunnel und dessen Größengrenzen.
+    const clonePath = job.cloneUrl.startsWith('/') ? job.cloneUrl : new URL(job.cloneUrl).pathname;
+    const absoluteCloneUrl = `${API_URL}${clonePath}`;
+    const cloneUrl = absoluteCloneUrl.replace('://', `://runner:${TOKEN}@`);
     const sourceDir = join(workspace, 'source');
     await mkdir(sourceDir, { recursive: true });
 
@@ -370,7 +460,12 @@ async function executeJob(job: Job): Promise<void> {
     const artifactDir = join(workspace, 'artifacts');
     await mkdir(artifactDir, { recursive: true });
 
+    if (MODE === 'host') {
+      host = await createHostContext(job, workspace, sourceDir, artifactDir, abort.signal);
+    }
+
     // ---- Container starten -------------------------------------------------
+    if (MODE === 'docker') {
     const dockerArgs = [
       'run',
       '--name', containerName,
@@ -416,6 +511,7 @@ async function executeJob(job: Job): Promise<void> {
     }
 
     log.write('✓ Container läuft.\n\n');
+    }
 
     // ---- Schritte ausführen -------------------------------------------------
     let jobSuccess = true;
@@ -454,7 +550,9 @@ async function executeJob(job: Job): Promise<void> {
         status: 'running',
       }).catch(() => {});
 
-      const result = await executeStep(job, step, containerName, log, deadline);
+      const result = host
+        ? await executeHostStep(job, step, host, log, deadline)
+        : await executeStep(job, step, containerName, log, deadline);
 
       const stepStatus = result.timedOut
         ? 'timed_out'
@@ -486,6 +584,7 @@ async function executeJob(job: Job): Promise<void> {
 
     // ---- Artefakte hochladen ------------------------------------------------
     log.setStep(null);
+    if (host) await stopGradleDaemons(host);
     await uploadArtifacts(job, artifactDir, log);
 
     if (cancelled) {
@@ -604,6 +703,16 @@ const ACTION_ALIASES: Record<string, string> = {
   'forge/upload-artifact': 'upload-artifact',
   'actions/setup-node': 'setup-node',
   'forge/setup-node': 'setup-node',
+  'actions/setup-java': 'setup-java',
+  'forge/setup-java': 'setup-java',
+  'actions/setup-go': 'setup-go',
+  'forge/setup-go': 'setup-go',
+  'actions/setup-python': 'setup-python',
+  'forge/setup-python': 'setup-python',
+  // Gradle bringt seinen Wrapper selbst mit; die Aktion richtet nur Caches ein.
+  'gradle/actions/setup-gradle': 'noop',
+  'gradle/gradle-build-action': 'noop',
+  'actions/cache': 'noop',
 };
 
 async function executeAction(
@@ -649,7 +758,8 @@ async function executeAction(
     `Die Aktion "${step.uses}" ist auf dieser Instanz nicht verfügbar.\n` +
       'Es gibt keinen Marktplatz: Aktionen sind fest im Runner umgesetzt.\n' +
       'Unterstützt werden actions/checkout, actions/setup-node und\n' +
-      'actions/upload-artifact (auch unter forge/).\n' +
+      'actions/upload-artifact (auch unter forge/). Im Host-Modus zusätzlich\n' +
+      'actions/setup-java und actions/setup-go.\n' +
       'Alles andere schreibst du als "run"-Schritt.\n',
   );
   return { exitCode: 1, timedOut: false };
@@ -743,6 +853,408 @@ async function setupNode(
   return install;
 }
 
+
+// ---------------------------------------------------------------------------
+// Host-Modus
+// ---------------------------------------------------------------------------
+
+interface HostContext {
+  workspace: string;
+  sourceDir: string;
+  artifactDir: string;
+  tempDir: string;
+  signal: AbortSignal;
+  /** Variablen, die Schritte über GITHUB_ENV oder setup-* gesetzt haben. */
+  extraEnv: Record<string, string>;
+  /** Verzeichnisse, die vor PATH gestellt werden (neueste zuerst). */
+  extraPath: string[];
+  files: { env: string; path: string; output: string; summary: string };
+  baseEnv: Record<string, string>;
+  shell: string;
+}
+
+/** Variablen des Runners, die an Schritte weitergereicht werden dürfen. */
+const HOST_ENV_PASSTHROUGH = [
+  'PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'LC_ALL', 'TZ', 'SHELL',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy',
+  'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS',
+];
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function createHostContext(
+  job: Job,
+  workspace: string,
+  sourceDir: string,
+  artifactDir: string,
+  signal: AbortSignal,
+): Promise<HostContext> {
+  const tempDir = join(workspace, 'tmp');
+  await mkdir(tempDir, { recursive: true });
+  await mkdir(TOOL_CACHE, { recursive: true });
+
+  const files = {
+    env: join(workspace, 'github_env'),
+    path: join(workspace, 'github_path'),
+    output: join(workspace, 'github_output'),
+    summary: join(workspace, 'github_summary'),
+  };
+  for (const file of Object.values(files)) await writeFile(file, '', { mode: 0o600 });
+
+  const passthrough: Record<string, string> = {};
+  for (const key of HOST_ENV_PASSTHROUGH) {
+    const value = process.env[key];
+    if (value !== undefined) passthrough[key] = value;
+  }
+
+  const secrets: Record<string, string> = {};
+  for (const [key, value] of Object.entries(job.secrets)) {
+    if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) secrets[`FORGE_SECRET_${key}`] = value;
+  }
+
+  const baseEnv: Record<string, string> = {
+    ...passthrough,
+    ...job.env,
+    ...secrets,
+    TMPDIR: tempDir,
+    RUNNER_TEMP: tempDir,
+    RUNNER_TOOL_CACHE: TOOL_CACHE,
+    RUNNER_OS: 'Linux',
+    RUNNER_ARCH: process.arch === 'arm64' ? 'ARM64' : 'X64',
+    // Adresse, unter der dieser Runner die API erreicht (meist lokal). Uploads
+    // großer Dateien laufen darüber statt über den öffentlichen Tunnel.
+    FORGE_RUNNER_API_URL: API_URL,
+    GITHUB_WORKSPACE: sourceDir,
+    FORGE_WORKSPACE: sourceDir,
+    GITHUB_ENV: files.env,
+    GITHUB_PATH: files.path,
+    GITHUB_OUTPUT: files.output,
+    GITHUB_STEP_SUMMARY: files.summary,
+  };
+
+  const shell = (await exists('/bin/bash')) ? '/bin/bash' : '/bin/sh';
+
+  return {
+    workspace, sourceDir, artifactDir, tempDir, signal,
+    extraEnv: {}, extraPath: [], files, baseEnv, shell,
+  };
+}
+
+function hostEnv(host: HostContext, stepEnv: Record<string, string> = {}): NodeJS.ProcessEnv {
+  const env: Record<string, string> = { ...host.baseEnv, ...host.extraEnv };
+  const basePath = env.PATH ?? '/usr/local/bin:/usr/bin:/bin';
+  env.PATH = [...host.extraPath, basePath].join(':');
+  // Schritt-Umgebung wird im Skript exportiert (wegen Secret-Platzhaltern),
+  // hier nur Werte ohne Platzhalter direkt setzen.
+  for (const [key, value] of Object.entries(stepEnv)) {
+    if (!value.includes('${FORGE_SECRET_')) env[key] = value;
+  }
+  return env;
+}
+
+/**
+ * Liest GITHUB_ENV / GITHUB_PATH nach einem Schritt aus und leert sie.
+ * Unterstützt KEY=VALUE und die mehrzeilige Form KEY<<DELIM … DELIM.
+ */
+async function absorbStepFiles(host: HostContext, log: LogBuffer): Promise<void> {
+  const envText = await readFile(host.files.env, 'utf8').catch(() => '');
+  if (envText) {
+    const lines = envText.split(/\r?\n/);
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index]!;
+      if (!line.trim()) continue;
+      const heredoc = /^([A-Za-z_][A-Za-z0-9_]*)<<(.+)$/.exec(line);
+      if (heredoc) {
+        const collected: string[] = [];
+        index++;
+        while (index < lines.length && lines[index] !== heredoc[2]) collected.push(lines[index++]!);
+        host.extraEnv[heredoc[1]!] = collected.join('\n');
+        continue;
+      }
+      const eq = line.indexOf('=');
+      const key = eq > 0 ? line.slice(0, eq) : '';
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+        log.write(`! Ungültige Zeile in GITHUB_ENV wird übergangen.\n`);
+        continue;
+      }
+      if (key === 'PATH') {
+        log.write('! PATH lässt sich nicht über GITHUB_ENV setzen, nutze GITHUB_PATH.\n');
+        continue;
+      }
+      host.extraEnv[key] = line.slice(eq + 1);
+    }
+    await writeFile(host.files.env, '');
+  }
+
+  const pathText = await readFile(host.files.path, 'utf8').catch(() => '');
+  if (pathText) {
+    for (const entry of pathText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)) {
+      host.extraPath.unshift(entry);
+    }
+    await writeFile(host.files.path, '');
+  }
+}
+
+async function executeHostStep(
+  job: Job,
+  step: JobStep,
+  host: HostContext,
+  log: LogBuffer,
+  deadline: number,
+): Promise<RunResult> {
+  let result: RunResult;
+
+  if (step.uses) {
+    result = await executeHostAction(job, step, host, log, deadline);
+  } else if (!step.run) {
+    return { exitCode: 0, timedOut: false };
+  } else {
+    const workdir = step.workingDirectory
+      ? join(host.sourceDir, step.workingDirectory)
+      : host.sourceDir;
+
+    if (!workdir.startsWith(host.sourceDir)) {
+      log.write('working-directory muss innerhalb des Repositorys liegen.\n');
+      return { exitCode: 1, timedOut: false };
+    }
+
+    const exports = Object.entries(step.env)
+      .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+      .map(([key, value]) => `export ${key}=${quoteWithSecretRefs(value)}`)
+      .join('\n');
+
+    // Wie bei GitHub: auf Linux ist bash die Standard-Shell. Der Server setzt
+    // ohne Angabe "sh"; im Host-Modus wird trotzdem bash genommen, wenn es da
+    // ist, damit übernommene Workflows (PIPESTATUS, [[ ]], Arrays) laufen.
+    const shell = host.shell;
+    const script = [shell.endsWith('bash') ? 'set -eo pipefail' : 'set -e', exports, step.run]
+      .filter(Boolean)
+      .join('\n');
+
+    result = await runProcess(shell, ['-c', script], {
+      cwd: workdir,
+      env: hostEnv(host),
+      timeoutMs: Math.max(deadline - Date.now(), 1000),
+      onOutput: (chunk) => log.write(chunk),
+      processGroup: true,
+      signal: host.signal,
+    });
+  }
+
+  await absorbStepFiles(host, log);
+  return result;
+}
+
+/** Führt ein kurzes Hilfsskript im Host-Modus aus. */
+function hostSh(
+  host: HostContext,
+  script: string,
+  log: LogBuffer,
+  deadline: number,
+  capture?: (chunk: string) => void,
+): Promise<RunResult> {
+  return runProcess('/bin/sh', ['-c', `set -e\n${script}`], {
+    cwd: host.sourceDir,
+    env: hostEnv(host),
+    timeoutMs: Math.max(deadline - Date.now(), 1000),
+    onOutput: capture ?? ((chunk) => log.write(chunk)),
+    processGroup: true,
+    signal: host.signal,
+  });
+}
+
+const shellQuote = (text: string): string => `'${text.split("'").join(`'\\''`)}'`;
+
+function hostArch(): { node: string; java: string; go: string } | null {
+  if (process.arch === 'x64') return { node: 'x64', java: 'x64', go: 'amd64' };
+  if (process.arch === 'arm64') return { node: 'arm64', java: 'aarch64', go: 'arm64' };
+  return null;
+}
+
+async function executeHostAction(
+  job: Job,
+  step: JobStep,
+  host: HostContext,
+  log: LogBuffer,
+  deadline: number,
+): Promise<RunResult> {
+  const named = step.uses!.split('@')[0]!;
+  const action = ACTION_ALIASES[named] ?? named;
+  const ok: RunResult = { exitCode: 0, timedOut: false };
+  const arch = hostArch();
+
+  switch (action) {
+    case 'checkout':
+      log.write('Der Quelltext wurde bereits vor dem ersten Schritt ausgecheckt.\n');
+      return ok;
+
+    case 'noop':
+      log.write(`"${named}" ist hier nicht nötig und wird übersprungen.\n`);
+      return ok;
+
+    case 'upload-artifact': {
+      const name = (step.with.name ?? 'artifact').replace(/[^A-Za-z0-9._-]/g, '_') || 'artifact';
+      const paths = (step.with.path ?? '.')
+        .split(/\r?\n/)
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      log.write(`Artefakt "${name}" wird aus ${paths.join(', ')} gesammelt.\n`);
+      const target = join(host.artifactDir, name);
+      await mkdir(target, { recursive: true });
+      // Globs wie build/libs/*.jar soll die Shell auflösen; der Zielpfad ist fest.
+      const copies = paths
+        .map((entry) => `for f in ${entry.replace(/[^A-Za-z0-9._\-/*?]/g, '')}; do cp -r -- "$f" ${shellQuote(target)}/; done`)
+        .join('\n');
+      return hostSh(host, copies, log, deadline);
+    }
+
+    case 'setup-python': {
+      log.write('Python des Rechners wird verwendet.\n');
+      return hostSh(host, 'python3 --version', log, deadline);
+    }
+
+    case 'setup-node': {
+      const requested = String(step.with['node-version'] ?? '').trim();
+      const major = /^\d+/.exec(requested)?.[0];
+      if (!major) {
+        log.write('Ohne gültige "node-version" bleibt das Node des Rechners.\n');
+        return ok;
+      }
+      let installed = '';
+      await hostSh(host, 'node --version 2>/dev/null || true', log, deadline, (c) => (installed += c));
+      if (/v(\d+)/.exec(installed)?.[1] === major) {
+        log.write(`Node ${installed.trim()} ist bereits vorhanden.\n`);
+        return ok;
+      }
+      if (!arch) return unsupportedArch(log);
+      const dir = join(TOOL_CACHE, 'node', requested);
+      const exact = /^\d+\.\d+\.\d+$/.test(requested);
+      const resolve = exact
+        ? `V=${requested}`
+        : `V=$(curl -fsSL https://nodejs.org/dist/index.json | grep -o '"version":"v${major}\\.[0-9.]*"' | head -1 | cut -d'"' -f4 | tr -d v)`;
+      const result = await hostSh(
+        host,
+        `if [ ! -x ${shellQuote(dir)}/bin/node ]; then\n` +
+          `  ${resolve}\n` +
+          `  test -n "$V" || { echo "Keine passende Node-Version gefunden."; exit 1; }\n` +
+          `  mkdir -p ${shellQuote(dir)}.part\n` +
+          `  curl -fsSL "https://nodejs.org/dist/v$V/node-v$V-linux-${arch.node}.tar.xz" | tar -xJ -C ${shellQuote(dir)}.part --strip-components=1\n` +
+          `  rm -rf ${shellQuote(dir)} && mv ${shellQuote(dir)}.part ${shellQuote(dir)}\n` +
+          `fi\n` +
+          `${shellQuote(dir)}/bin/node --version`,
+        log,
+        deadline,
+      );
+      if (result.exitCode === 0) host.extraPath.unshift(join(dir, 'bin'));
+      return result;
+    }
+
+    case 'setup-java': {
+      const version = String(step.with['java-version'] ?? '').trim();
+      const major = /^\d+/.exec(version)?.[0];
+      if (!major) {
+        log.write('setup-java braucht "java-version", z. B. 21 oder 25.\n');
+        return { exitCode: 1, timedOut: false };
+      }
+      if (!arch) return unsupportedArch(log);
+      const dir = join(TOOL_CACHE, 'java', `temurin-${major}`);
+      log.write(`JDK ${major} (Temurin) wird eingerichtet…\n`);
+      const url = `https://api.adoptium.net/v3/binary/latest/${major}/ga/linux/${arch.java}/jdk/hotspot/normal/eclipse`;
+      const result = await hostSh(
+        host,
+        `if [ ! -x ${shellQuote(dir)}/bin/java ]; then\n` +
+          `  rm -rf ${shellQuote(dir)}.part && mkdir -p ${shellQuote(dir)}.part\n` +
+          `  curl -fsSL ${shellQuote(url)} | tar -xz -C ${shellQuote(dir)}.part --strip-components=1\n` +
+          `  rm -rf ${shellQuote(dir)} && mv ${shellQuote(dir)}.part ${shellQuote(dir)}\n` +
+          `fi\n` +
+          `${shellQuote(dir)}/bin/java -version 2>&1`,
+        log,
+        deadline,
+      );
+      if (result.exitCode === 0) {
+        host.extraEnv.JAVA_HOME = dir;
+        host.extraEnv[`JAVA_HOME_${major}_X64`] = dir;
+        host.extraPath.unshift(join(dir, 'bin'));
+      } else {
+        log.write('Das JDK konnte nicht geladen werden (api.adoptium.net erreichbar?).\n');
+      }
+      return result;
+    }
+
+    case 'setup-go': {
+      const requested = String(step.with['go-version'] ?? 'stable').trim().replace(/^v/, '');
+      if (!arch) return unsupportedArch(log);
+      if (!/^(stable|\d+(\.\d+){0,2})$/.test(requested)) {
+        log.write(`Die Go-Version "${requested}" wird nicht verstanden.\n`);
+        return { exitCode: 1, timedOut: false };
+      }
+      // Version auflösen: neueste stabile Version mit passendem Präfix.
+      const pick =
+        requested === 'stable'
+          ? `grep -o '"version": *"go[0-9.]*"' | head -1`
+          : `grep -o '"version": *"go${requested.replace(/\./g, '\\.')}[0-9.]*"' | head -1`;
+      let resolved = '';
+      const lookup = await hostSh(
+        host,
+        `curl -fsSL 'https://go.dev/dl/?mode=json' | ${pick} | grep -o 'go[0-9.]*'`,
+        log,
+        deadline,
+        (chunk) => (resolved += chunk),
+      );
+      const goVersion = resolved.trim();
+      if (lookup.exitCode !== 0 || !goVersion) {
+        log.write(`Keine Go-Version zu "${requested}" gefunden (go.dev erreichbar?).\n`);
+        return { exitCode: 1, timedOut: false };
+      }
+      const dir = join(TOOL_CACHE, 'go', goVersion);
+      const result = await hostSh(
+        host,
+        `if [ ! -x ${shellQuote(dir)}/bin/go ]; then\n` +
+          `  rm -rf ${shellQuote(dir)}.part && mkdir -p ${shellQuote(dir)}.part\n` +
+          `  curl -fsSL "https://go.dev/dl/${goVersion}.linux-${arch.go}.tar.gz" | tar -xz -C ${shellQuote(dir)}.part --strip-components=1\n` +
+          `  rm -rf ${shellQuote(dir)} && mv ${shellQuote(dir)}.part ${shellQuote(dir)}\n` +
+          `fi\n` +
+          `${shellQuote(dir)}/bin/go version`,
+        log,
+        deadline,
+      );
+      if (result.exitCode === 0) host.extraPath.unshift(join(dir, 'bin'));
+      return result;
+    }
+
+    default:
+      log.write(
+        `Die Aktion "${step.uses}" ist auf diesem Runner nicht verfügbar.\n` +
+          'Unterstützt: checkout, upload-artifact, setup-node, setup-java, setup-go,\n' +
+          'setup-python (nutzt das Python des Rechners). Alles andere als "run"-Schritt.\n',
+      );
+      return { exitCode: 1, timedOut: false };
+  }
+}
+
+function unsupportedArch(log: LogBuffer): RunResult {
+  log.write(`Die Architektur ${process.arch} wird für Downloads nicht unterstützt.\n`);
+  return { exitCode: 1, timedOut: false };
+}
+
+/** Beendet Gradle-Daemons des Jobs, damit sie nach dem Job nicht weiterlaufen. */
+async function stopGradleDaemons(host: HostContext): Promise<void> {
+  if (!(await exists(join(host.sourceDir, 'gradlew')))) return;
+  await runProcess('/bin/sh', ['-c', './gradlew --stop >/dev/null 2>&1 || true'], {
+    cwd: host.sourceDir,
+    env: hostEnv(host),
+    timeoutMs: 60_000,
+    processGroup: true,
+  });
+}
+
 /** Packt gesammelte Artefakte und lädt sie hoch. */
 async function uploadArtifacts(job: Job, artifactDir: string, log: LogBuffer): Promise<void> {
   let entries: string[];
@@ -765,7 +1277,6 @@ async function uploadArtifacts(job: Job, artifactDir: string, log: LogBuffer): P
 
     try {
       const info = await stat(archivePath);
-      const { readFile } = await import('node:fs/promises');
       const content = await readFile(archivePath);
 
       await api(`/api/v1/runner/jobs/${job.jobId}/artifacts`, undefined, content, {
@@ -790,15 +1301,25 @@ async function main(): Promise<void> {
 
   // Prüfen, dass Docker erreichbar ist – sonst scheitert jeder Job einzeln
   // und der Grund steht nur in den Joblogs.
-  const dockerCheck = await runProcess('docker', ['version', '--format', '{{.Server.Version}}']);
-  if (dockerCheck.exitCode !== 0) {
-    console.error('Docker ist nicht erreichbar. Der Runner kann keine Jobs ausführen.');
-    process.exit(1);
+  if (MODE === 'docker') {
+    const dockerCheck = await runProcess('docker', ['version', '--format', '{{.Server.Version}}']);
+    if (dockerCheck.exitCode !== 0) {
+      console.error(
+        'Docker ist nicht erreichbar. Der Runner kann keine Jobs ausführen.\n' +
+          'Ohne Docker: FORGE_RUNNER_MODE=host (siehe Kommentar oben in index.ts).',
+      );
+      process.exit(1);
+    }
+  } else {
+    console.warn(
+      `Host-Modus: Jobs laufen OHNE Container direkt auf diesem Rechner. ` +
+        `Freigegebene Besitzer: ${ALLOWED_OWNERS.join(', ')}`,
+    );
   }
 
   const session = await api<{ runnerId: string; name: string; pollIntervalMs: number }>(
     '/api/v1/runner/session',
-    { osName: platform, architecture: arch, version: '0.1.0', labels: LABELS },
+    { osName: platform, architecture: arch, version: '0.2.0', labels: LABELS },
   ).catch((error) => {
     console.error('Anmeldung fehlgeschlagen:', error.message);
     process.exit(1);

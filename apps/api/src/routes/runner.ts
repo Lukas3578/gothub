@@ -130,7 +130,10 @@ export async function registerRunnerRoutes(app: FastifyInstance): Promise<void> 
       .set({ lastSeenAt: new Date() })
       .where(eq(runners.id, runner.id));
 
-    const assignment = await claimJob(runner.id, runner.labels);
+    const assignment = await claimJob(runner.id, runner.labels, 120, {
+      repositoryId: runner.repositoryId,
+      organizationId: runner.organizationId,
+    });
 
     if (!assignment) {
       await db.update(runners).set({ status: 'idle' }).where(eq(runners.id, runner.id));
