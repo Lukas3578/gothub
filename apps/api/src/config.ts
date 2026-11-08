@@ -29,7 +29,10 @@ function loadDotEnv(): void {
       const eq = line.indexOf('=');
       if (eq === -1) continue;
       const key = line.slice(0, eq).trim();
-      if (key in process.env) continue; // echte Umgebungsvariablen haben Vorrang
+      // Echte Umgebungsvariablen haben Vorrang – aber nur, wenn sie auch einen
+      // Wert haben. Eine leer exportierte Variable (z. B. DATABASE_URL= aus einer
+      // anderen Anwendung im selben Container) soll die .env nicht verdecken.
+      if (process.env[key]) continue;
       let value = line.slice(eq + 1).trim();
       if (
         (value.startsWith('"') && value.endsWith('"')) ||

@@ -77,11 +77,15 @@ VITE_API_URL="${URL}" npm run build
 npm run build --workspace @forge/runner
 
 say "Datenbank migrieren"
+# Variablen anderer Programme im selben Container duerfen die .env nicht ueberdecken.
+for v in $(grep -oE '^[A-Z_]+=' .env | tr -d '='); do
+  if [ -n "${!v+x}" ]; then echo "Hinweis: $v ist in der Shell gesetzt und wird fuer Vortex Git ignoriert."; unset "$v"; fi
+done
 npm run db:migrate
 
 say "Starten (pm2: ${NAME}, Port ${PORT})"
 if pm2 describe "${NAME}" >/dev/null 2>&1; then
-  pm2 restart "${NAME}" --update-env
+  pm2 restart "${NAME}"
 else
   pm2 start apps/api/dist/server.js --name "${NAME}" --cwd "${ROOT}" --time
 fi
