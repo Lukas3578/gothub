@@ -59,6 +59,16 @@ function isCsrfExempt(request: FastifyRequest): boolean {
   if (request.url.startsWith('/internal/')) return true;
   // Token-Authentifizierung ist per se nicht CSRF-anfällig.
   if (request.authMethod === 'token') return true;
+  // GitHub-kompatible API ohne Session-Cookie: ein Browser kann hier nichts im
+  // Namen eines Benutzers auslösen. Fehlt die Anmeldung, antworten die Routen
+  // selbst mit 401 ("Requires authentication") statt einer verwirrenden
+  // CSRF-Meldung an ein Build-Skript.
+  if (
+    (request.url.startsWith('/api/v3/') || request.url.startsWith('/api/uploads/')) &&
+    !request.cookies[config.security.sessionCookieName]
+  ) {
+    return true;
+  }
   return false;
 }
 
