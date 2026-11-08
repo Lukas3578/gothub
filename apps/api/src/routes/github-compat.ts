@@ -659,7 +659,14 @@ ${entries}
     },
   );
 
-  app.all('/api/v3/*', async (_request, reply) => ghError(reply, 404, 'Not Found'));
+  // Unbekannte Pfade unter /api/v3: 404 im GitHub-Format (ohne HEAD, damit es keine
+  // Doppelung mit den automatisch angelegten HEAD-Routen gibt).
+  app.route({
+    method: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    url: '/api/v3/*',
+    exposeHeadRoute: false,
+    handler: async (_request, reply) => ghError(reply, 404, 'Not Found'),
+  });
   });
 }
 
