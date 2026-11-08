@@ -518,10 +518,9 @@ export async function registerGithubCompatRoutes(parent: FastifyInstance): Promi
     return sendAsset(reply, asset, request.method === 'HEAD');
   };
   type DL = { Params: RepoParams & { tag?: string; file: string } };
+  // HEAD legt Fastify zu jeder GET-Route selbst an (exposeHeadRoutes).
   app.get<DL>('/:owner/:repo/releases/download/:tag/:file', download);
-  app.head<DL>('/:owner/:repo/releases/download/:tag/:file', download);
   app.get<DL>('/:owner/:repo/releases/latest/download/:file', download);
-  app.head<DL>('/:owner/:repo/releases/latest/download/:file', download);
 
   // Atom-Feed der Releases (electron-updater liest daraus die Versionen).
   // Nur Versions-Tags: ein Sammel-Release wie "vortex-files" ist kein Programm-Update.
