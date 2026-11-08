@@ -84,16 +84,18 @@ done
 npm run db:migrate
 
 say "Starten (pm2: ${VG_NAME}, Port ${VG_PORT})"
-if pm2 describe "${VG_NAME}" >/dev/null 2>&1; then
-  pm2 restart "${VG_NAME}"
-else
-  pm2 start apps/api/dist/server.js --name "${VG_NAME}" --cwd "${ROOT}" --time
-fi
+# Mit leerer Umgebung starten: Variablen anderer Programme im Container (z. B. PORT
+# oder DATABASE_URL vom Freunde-Server) duerfen Vortex Git nicht umlenken. Alles
+# Noetige steht in .env.
+NODE_BIN=$(command -v node)
+pm2 delete "${VG_NAME}" >/dev/null 2>&1 || true
+pm2 start bash --name "${VG_NAME}" --time -- -c \
+  "cd '${ROOT}' && exec env -i PATH='${PATH}' HOME='${HOME}' LANG=C.UTF-8 '${NODE_BIN}' apps/api/dist/server.js"
 pm2 save >/dev/null 2>&1 || true
 
 say "Kurzer Test"
 ok=""
-for i in $(seq 1 30); do
+for i in $(seq 1 45); do
   if curl -fsS "http://127.0.0.1:${VG_PORT}/api/v3" >/dev/null 2>&1; then ok=1; break; fi
   sleep 1
 done
@@ -104,6 +106,7 @@ if [ -n "$ok" ]; then
   echo "Fertig. Jetzt im Cloudflare-Tunnel ${VG_URL#https://} -> http://localhost:${VG_PORT} eintragen"
   echo "(Anleitung: VORTEX.md, Schritt 2)."
 else
-  echo "Die API antwortet nicht. Log ansehen: pm2 logs ${VG_NAME} --lines 80"
+  echo "Die API antwortet nicht. Letzte Log-Zeilen:"
+  pm2 logs "${VG_NAME}" --lines 40 --nostream || true
   exit 1
 fi
