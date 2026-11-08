@@ -1209,12 +1209,13 @@ async function executeHostAction(
         ? ok
         : await hostSh(
             host,
-            `curl -fsSL 'https://go.dev/dl/?mode=json&include=all' | grep -oE '${pattern}' | head -1 | grep -oE 'go[0-9.]+'`,
+            `curl -fsSL 'https://go.dev/dl/?mode=json&include=all' 2>/dev/null | grep -oE '${pattern}' | head -1 | grep -oE 'go[0-9.]+'`,
             log,
             deadline,
             (chunk) => (resolved += chunk),
           );
-      const goVersion = resolved.trim();
+      // Nur die eigentliche Versionszeile (z. B. "go1.23.12"), keine Meldungen von curl.
+      const goVersion = resolved.split(/\s+/).find((part) => /^go\d+(\.\d+)+$/.test(part)) ?? '';
       if (lookup.exitCode !== 0 || !goVersion) {
         log.write(`Keine Go-Version zu "${requested}" gefunden (go.dev erreichbar?).\n`);
         return { exitCode: 1, timedOut: false };
