@@ -17,10 +17,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 
-URL="${VORTEX_GIT_URL:-https://git.vortexpvp.eu}"
-URL="${URL%/}"
-PORT="${VORTEX_GIT_PORT:-4100}"
-NAME="${VORTEX_GIT_NAME:-vortex-git}"
+VG_URL="${VORTEX_GIT_URL:-https://git.vortexpvp.eu}"
+VG_URL="${VG_URL%/}"
+VG_PORT="${VORTEX_GIT_PORT:-4100}"
+VG_NAME="${VORTEX_GIT_NAME:-vortex-git}"
 
 say() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 
@@ -43,9 +43,9 @@ NODE_ENV=production
 FORGE_BRAND_NAME=Vortex Git
 FORGE_BRAND_TAGLINE=Code, Releases und Builds von Vortex
 API_HOST=127.0.0.1
-PORT=${PORT}
-PUBLIC_API_URL=${URL}
-PUBLIC_WEB_URL=${URL}
+PORT=${VG_PORT}
+PUBLIC_API_URL=${VG_URL}
+PUBLIC_WEB_URL=${VG_URL}
 DATABASE_URL=file:./data/forge.db
 GIT_STORAGE_ROOT=./data/repositories
 UPLOAD_STORAGE_ROOT=./data/uploads
@@ -59,7 +59,7 @@ ALLOW_REGISTRATION=true
 MAIL_TRANSPORT=console
 ENV
   chmod 600 .env
-  echo ".env geschrieben (Adresse ${URL}, Port ${PORT})."
+  echo ".env geschrieben (Adresse ${VG_URL}, Port ${VG_PORT})."
 else
   echo ".env gibt es schon, bleibt wie sie ist."
 fi
@@ -72,8 +72,8 @@ for versuch in 1 2 3; do
   echo "Neuer Versuch in 15 s ..."; sleep 15
 done
 
-say "Bauen (Web-Oberflaeche zeigt auf ${URL})"
-VITE_API_URL="${URL}" npm run build
+say "Bauen (Web-Oberflaeche zeigt auf ${VG_URL})"
+VITE_API_URL="${VG_URL}" npm run build
 npm run build --workspace @forge/runner
 
 say "Datenbank migrieren"
@@ -83,27 +83,27 @@ for v in $(grep -oE '^[A-Z_]+=' .env | tr -d '='); do
 done
 npm run db:migrate
 
-say "Starten (pm2: ${NAME}, Port ${PORT})"
-if pm2 describe "${NAME}" >/dev/null 2>&1; then
-  pm2 restart "${NAME}"
+say "Starten (pm2: ${VG_NAME}, Port ${VG_PORT})"
+if pm2 describe "${VG_NAME}" >/dev/null 2>&1; then
+  pm2 restart "${VG_NAME}"
 else
-  pm2 start apps/api/dist/server.js --name "${NAME}" --cwd "${ROOT}" --time
+  pm2 start apps/api/dist/server.js --name "${VG_NAME}" --cwd "${ROOT}" --time
 fi
 pm2 save >/dev/null 2>&1 || true
 
 say "Kurzer Test"
 ok=""
 for i in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:${PORT}/api/v3" >/dev/null 2>&1; then ok=1; break; fi
+  if curl -fsS "http://127.0.0.1:${VG_PORT}/api/v3" >/dev/null 2>&1; then ok=1; break; fi
   sleep 1
 done
 if [ -n "$ok" ]; then
-  echo "API laeuft:            http://127.0.0.1:${PORT}/api/v3"
-  curl -fsS -o /dev/null -w "Web-Oberflaeche:       HTTP %{http_code}\n" "http://127.0.0.1:${PORT}/" || true
+  echo "API laeuft:            http://127.0.0.1:${VG_PORT}/api/v3"
+  curl -fsS -o /dev/null -w "Web-Oberflaeche:       HTTP %{http_code}\n" "http://127.0.0.1:${VG_PORT}/" || true
   echo
-  echo "Fertig. Jetzt im Cloudflare-Tunnel ${URL#https://} -> http://localhost:${PORT} eintragen"
+  echo "Fertig. Jetzt im Cloudflare-Tunnel ${VG_URL#https://} -> http://localhost:${VG_PORT} eintragen"
   echo "(Anleitung: VORTEX.md, Schritt 2)."
 else
-  echo "Die API antwortet nicht. Log ansehen: pm2 logs ${NAME} --lines 80"
+  echo "Die API antwortet nicht. Log ansehen: pm2 logs ${VG_NAME} --lines 80"
   exit 1
 fi
