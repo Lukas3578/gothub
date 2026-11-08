@@ -113,6 +113,23 @@ export function ActionsPage({ repo }: { repo: RepositoryDetail }) {
   if (!workflows || !runs) return <Spin />;
 
   const broken = workflows.filter((workflow) => workflow.parseError);
+  const selected = workflows.find((workflow) => workflow.id === filter) ?? null;
+
+  // Manuell starten (workflow_dispatch) auf dem Standard-Branch.
+  async function startSelected() {
+    if (!selected) return;
+    try {
+      const result = await api.post<{ runIds: string[] }>(`/api/v1/repos/${repoPath}/actions/dispatch`, {
+        workflowPath: selected.path,
+        ref: repo.defaultBranch,
+      });
+      const first = result.runIds[0];
+      if (first) window.location.href = `/${repoPath}/actions/runs/${first}`;
+      else setVersion((value) => value + 1);
+    } catch (err) {
+      setError(err);
+    }
+  }
 
   return (
     <div className="grid gap-5 lg:grid-cols-[240px_1fr]">
@@ -195,6 +212,19 @@ jobs:
               Danach brauchst du einen Runner, der die Jobs ausführt.
             </p>
           </Panel>
+        )}
+
+        {selected && canWrite && !selected.parseError && (
+          <div className="flex items-center justify-between gap-3 border border-line bg-raised/40 px-4 py-3">
+            <p className="text-xs text-muted">
+              <span className="font-medium text-ink">{selected.name}</span> von Hand auf{' '}
+              <code className="font-mono">{repo.defaultBranch}</code> starten
+              <span className="block text-2xs text-faint">Geht nur, wenn der Workflow „workflow_dispatch“ als Trigger hat.</span>
+            </p>
+            <Button size="sm" onClick={startSelected}>
+              ▶ Ausführen
+            </Button>
+          </div>
         )}
 
         <Panel title={`${runs.length} Läufe`} bodyClassName="divide-y divide-line">
