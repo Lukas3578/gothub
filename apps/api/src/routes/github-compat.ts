@@ -26,6 +26,7 @@
  */
 
 import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
@@ -180,23 +181,108 @@ async function access(request: FastifyRequest<{ Params: RepoParams }>, level: 'r
 }
 
 /** Datei ausliefern und den Zähler erhöhen. */
-async function sendAsset(reply: FastifyReply, asset: AssetRow, head = false) {
-  if (!head) {
-    await db
-      .update(releaseAssets)
-      .set({ downloadCount: sql`${releaseAssets.downloadCount} + 1` })
-      .where(eq(releaseAssets.id, asset.id));
+/**
+ * Zerlegt einen Range-Header ("bytes=0-99,200-299,-50") in Bereiche. Gibt null
+ * zurück, wenn keiner angefragt ist, und 'invalid', wenn er nicht erfüllbar ist.
+ */
+export function parseRanges(header: string | undefined, size: number): Array<[number, number]> | null | 'invalid' {
+  if (!header) return null;
+  const m = /^bytes=(.+)$/i.exec(header.trim());
+  if (!m) return null;
+  const ranges: Array<[number, number]> = [];
+  for (const part of m[1]!.split(',')) {
+    const r = /^\s*(\d*)\s*-\s*(\d*)\s*$/.exec(part);
+    if (!r || (r[1] === '' && r[2] === '')) return 'invalid';
+    let start: number;
+    let end: number;
+    if (r[1] === '') {
+      // "-500": die letzten 500 Bytes
+      const suffix = Number(r[2]);
+      if (suffix === 0) continue;
+      start = Math.max(size - suffix, 0);
+      end = size - 1;
+    } else {
+      start = Number(r[1]);
+      end = r[2] === '' ? size - 1 : Math.min(Number(r[2]), size - 1);
+    }
+    if (start > end || start >= size) continue;
+    ranges.push([start, end]);
+    if (ranges.length > 2000) return 'invalid';
   }
+  return ranges.length ? ranges : 'invalid';
+}
+
+/**
+ * Liefert eine Release-Datei aus – mit HTTP-Range wie GitHub/S3. electron-updater
+ * lädt Updates differenziell über die .blockmap und fragt dabei viele Bereiche
+ * auf einmal an (multipart/byteranges). Ohne Range-Unterstützung bekäme er für
+ * jeden Bereich die ganze Datei.
+ */
+async function sendAsset(reply: FastifyReply, asset: AssetRow, head = false, rangeHeader?: string) {
+  const size = asset.sizeBytes;
+  const file = objectPath(asset.storageKey);
+  const ranges = parseRanges(rangeHeader, size);
+
   reply
-    .header('Content-Type', 'application/octet-stream')
-    .header('Content-Length', String(asset.sizeBytes))
+    .header('Accept-Ranges', 'bytes')
     .header('Content-Disposition', `attachment; filename="${safeFilename(asset.name)}"`)
     .header('Cache-Control', 'no-cache')
     .header('X-Content-Type-Options', 'nosniff')
     // Downloads dürfen von überall eingebunden werden (Website, Launcher).
     .header('Cross-Origin-Resource-Policy', 'cross-origin');
+
+  if (ranges === 'invalid') {
+    return reply.code(416).header('Content-Range', `bytes */${size}`).send();
+  }
+
+  // Ganze Datei (nur sie zählt als Download).
+  if (!ranges) {
+    if (!head) {
+      await db
+        .update(releaseAssets)
+        .set({ downloadCount: sql`${releaseAssets.downloadCount} + 1` })
+        .where(eq(releaseAssets.id, asset.id));
+    }
+    reply.header('Content-Type', 'application/octet-stream').header('Content-Length', String(size));
+    if (head) return reply.send();
+    return reply.send(createReadStream(file));
+  }
+
+  // Ein Bereich.
+  if (ranges.length === 1) {
+    const [start, end] = ranges[0]!;
+    reply
+      .code(206)
+      .header('Content-Type', 'application/octet-stream')
+      .header('Content-Range', `bytes ${start}-${end}/${size}`)
+      .header('Content-Length', String(end - start + 1));
+    if (head) return reply.send();
+    return reply.send(createReadStream(file, { start, end }));
+  }
+
+  // Mehrere Bereiche: multipart/byteranges.
+  const boundary = `forge${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  const partHead = (start: number, end: number) =>
+    `--${boundary}\r\nContent-Type: application/octet-stream\r\nContent-Range: bytes ${start}-${end}/${size}\r\n\r\n`;
+  let length = 0;
+  for (const [start, end] of ranges) length += Buffer.byteLength(partHead(start, end)) + (end - start + 1) + 2;
+  length += Buffer.byteLength(`--${boundary}--\r\n`);
+
+  reply
+    .code(206)
+    .header('Content-Type', `multipart/byteranges; boundary=${boundary}`)
+    .header('Content-Length', String(length));
   if (head) return reply.send();
-  return reply.send(createReadStream(objectPath(asset.storageKey)));
+
+  async function* parts() {
+    for (const [start, end] of ranges as Array<[number, number]>) {
+      yield Buffer.from(partHead(start, end));
+      for await (const chunk of createReadStream(file, { start, end })) yield chunk as Buffer;
+      yield Buffer.from('\r\n');
+    }
+    yield Buffer.from(`--${boundary}--\r\n`);
+  }
+  return reply.send(Readable.from(parts()));
 }
 
 function escXml(s: string) {
@@ -438,7 +524,7 @@ export async function registerGithubCompatRoutes(parent: FastifyInstance): Promi
       const row = await assetWithRelease(a, request.params.assetId);
       if (!row) return ghError(reply, 404, 'Not Found');
       // Wie GitHub: mit "Accept: application/octet-stream" kommt die Datei, sonst die Beschreibung.
-      if (String(request.headers.accept ?? '').includes('application/octet-stream')) return sendAsset(reply, row.asset);
+      if (String(request.headers.accept ?? '').includes('application/octet-stream')) return sendAsset(reply, row.asset, false, request.headers.range);
       return assetJson(a, row.release, row.asset);
     },
   );
@@ -515,7 +601,7 @@ export async function registerGithubCompatRoutes(parent: FastifyInstance): Promi
     if (!r) return reply.code(404).send('Not Found');
     const asset = (await assetsOf(r.id)).find((x) => x.name === request.params.file);
     if (!asset) return reply.code(404).send('Not Found');
-    return sendAsset(reply, asset, request.method === 'HEAD');
+    return sendAsset(reply, asset, request.method === 'HEAD', request.headers.range);
   };
   type DL = { Params: RepoParams & { tag?: string; file: string } };
   // HEAD legt Fastify zu jeder GET-Route selbst an (exposeHeadRoutes).
