@@ -173,6 +173,8 @@ function runProcess(
     processGroup?: boolean;
     /** Abbruch von außen (Lauf wurde abgebrochen). */
     signal?: AbortSignal;
+    /** Standard-Eingabe schließen (wie bei GitHub: /dev/null). */
+    noStdin?: boolean;
   } = {},
 ): Promise<RunResult> {
   return new Promise((resolvePromise) => {
@@ -181,6 +183,9 @@ function runProcess(
       shell: false,
       env: options.env,
       detached: options.processGroup === true,
+      // Programme wie wine warten sonst auf eine Eingabe, die nie kommt, oder
+      // stürzen über eine offene, aber leere Pipe.
+      stdio: options.noStdin ? ['ignore', 'pipe', 'pipe'] : 'pipe',
     });
     let timedOut = false;
 
@@ -206,8 +211,8 @@ function runProcess(
     }
 
     const forward = (chunk: Buffer) => options.onOutput?.(chunk.toString('utf8'));
-    child.stdout.on('data', forward);
-    child.stderr.on('data', forward);
+    child.stdout?.on('data', forward);
+    child.stderr?.on('data', forward);
 
     child.on('error', (error) => {
       options.onOutput?.(`Prozessfehler: ${error.message}\n`);
@@ -923,7 +928,8 @@ async function createHostContext(
     ...passthrough,
     ...job.env,
     ...secrets,
-    TMPDIR: tempDir,
+    // Wie bei GitHub: RUNNER_TEMP zeigt auf einen Job-Ordner, TMPDIR bleibt
+    // unverändert (wine u. a. vertragen ein umgebogenes TMPDIR schlecht).
     RUNNER_TEMP: tempDir,
     RUNNER_TOOL_CACHE: TOOL_CACHE,
     RUNNER_OS: 'Linux',
@@ -1045,6 +1051,7 @@ async function executeHostStep(
       onOutput: (chunk) => log.write(chunk),
       processGroup: true,
       signal: host.signal,
+      noStdin: true,
     });
   }
 
@@ -1067,6 +1074,7 @@ function hostSh(
     onOutput: capture ?? ((chunk) => log.write(chunk)),
     processGroup: true,
     signal: host.signal,
+    noStdin: true,
   });
 }
 
