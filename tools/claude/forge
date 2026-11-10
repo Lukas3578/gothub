@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""
+forge - Kommandozeile fuer Vortex Git (git.vortexpvp.eu), fuer Menschen und Claude.
+
+  forge pr create  --head BRANCH [--base main] --title T [--body B | --body-file F]
+  forge pr list    [--state open|closed|all]
+  forge pr view    NR
+  forge pr approve NR [--body TEXT]
+  forge pr merge   NR [--strategy merge|squash|rebase] [--keep-branch]
+  forge pr comment NR --body TEXT
+  forge run list   [--limit 10]
+  forge run view   RUN_ID
+  forge run logs   RUN_ID            (Logs aller Jobs)
+  forge run watch  RUN_ID            (wartet bis fertig; Exit 0 nur bei Erfolg)
+  forge run dispatch --workflow .forge/workflows/X.yml [--ref main] [--watch]
+  forge run retry  RUN_ID | forge run cancel RUN_ID
+  forge workflows
+  forge push [BRANCH]                (git push mit Token, ohne Passwortabfrage)
+
+Ueberall: --repo owner/name (Standard: aus "git remote origin" im aktuellen Ordner).
+Umgebung: FORGE_TOKEN (Pflicht), FORGE_HOST (Standard https://git.vortexpvp.eu).
+"""
+import argparse, json, os, re, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+
+HOST = (os.environ.get("FORGE_HOST") or "https://git.vortexpvp.eu").rstrip("/")
+TOKEN = (os.environ.get("FORGE_TOKEN") or "").strip()
+FERTIG = {"success", "failure", "cancelled", "skipped", "timed_out"}
+
+
+def die(msg, code=1):
+    print(f"forge: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def api(method, path, body=None, text=False):
+    if not TOKEN:
+        die("FORGE_TOKEN fehlt.")
+    req = urllib.request.Request(HOST + path, method=method,
+                                 data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Authorization": f"Bearer {TOKEN}", "Accept": "application/json",
+                                          "Content-Type": "application/json", "User-Agent": "forge-cli"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            raw = r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf8", "replace")
+        try:
+            detail = json.loads(detail).get("error", {}).get("message") or detail
+        except Exception:
+            pass
+        die(f"HTTP {e.code} bei {method} {path}: {detail[:500]}")
+    except urllib.error.URLError as e:
+        die(f"{HOST} nicht erreichbar: {e.reason}")
+    if text:
+        return raw.decode("utf8", "replace")
+    return json.loads(raw) if raw else None
+
+
+def repo_from_git():
+    try:
+        url = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True).stdout.strip()
+    except FileNotFoundError:
+        url = ""
+    m = re.search(r"[/:]([^/:]+)/([^/]+?)(?:\.git)?/?$", url)
+    return f"{m.group(1)}/{m.group(2)}" if m else ""
+
+
+def R(a):
+    r = a.repo or repo_from_git()
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", r or ""):
+        die("Repo unbekannt: --repo owner/name angeben oder im Repo-Ordner ausfuehren.")
+    return f"/api/v1/repos/{r}"
+
+
+def out(data):
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------- Pull Requests
+def pr_create(a):
+    body = open(a.body_file, encoding="utf8").read() if a.body_file else (a.body or "")
+    pr = api("POST", f"{R(a)}/pulls", {"title": a.title, "body": body, "base": a.base, "head": a.head, "draft": a.draft})
+    print(f"PR #{pr.get('number')} angelegt: {HOST}/{(a.repo or repo_from_git())}/pulls/{pr.get('number')}")
+
+
+def pr_list(a):
+    res = api("GET", f"{R(a)}/pulls?state={a.state}&perPage=50")
+    for p in res.get("items", res if isinstance(res, list) else []):
+        print(f"#{p['number']:<4} {p['state']:<7} {p['title']}  ({(p.get('author') or {}).get('username', '?')})")
+
+
+def pr_view(a):
+    p = api("GET", f"{R(a)}/pulls/{a.nr}")
+    keep = {k: p.get(k) for k in ("number", "title", "state", "mergeableState", "additions", "deletions",
+                                    "changedFiles", "commitCount", "reviewers", "checks", "draft")}
+    keep["base"] = (p.get("base") or {}).get("ref")
+    keep["head"] = (p.get("head") or {}).get("ref")
+    out(keep)
+
+
+def pr_approve(a):
+    api("POST", f"{R(a)}/pulls/{a.nr}/reviews", {"state": "approved", "body": a.body or None, "comments": []})
+    print(f"PR #{a.nr} zugestimmt.")
+
+
+def pr_merge(a):
+    res = api("POST", f"{R(a)}/pulls/{a.nr}/merge", {"strategy": a.strategy, "deleteBranch": not a.keep_branch})
+    print(f"PR #{a.nr} gemergt." + (f" Commit {res.get('sha') or res.get('commitSha')}" if isinstance(res, dict) else ""))
+
+
+def pr_comment(a):
+    api("POST", f"/api/v1/repos/{(a.repo or repo_from_git())}/issues/{a.nr}/comments", {"body": a.body})
+    print("Kommentar gesendet.")
+
+
+# ---------------------------------------------------------------- Workflows
+def run_list(a):
+    res = api("GET", f"{R(a)}/actions/runs?perPage={a.limit}")
+    for r in res.get("items", []):
+        print(f"{r['id']}  #{r['runNumber']:<4} {r['status']:<10} {r['workflowName']}  "
+              f"{r.get('headBranch') or ''} {r['headSha'][:8]}  {r.get('createdAt', '')[:19]}")
+
+
+def run_view(a):
+    r = api("GET", f"{R(a)}/actions/runs/{a.run}")
+    print(f"Lauf #{r['runNumber']} {r['workflowName']}: {r['status']}  ({r.get('headBranch')} {r['headSha'][:8]})")
+    for j in r.get("jobs", []):
+        extra = f"  Fehler: {j['errorMessage']}" if j.get("errorMessage") else ""
+        print(f"  Job {j['id']}  {j['name']}: {j['status']}{extra}")
+    return r
+
+
+def run_logs(a):
+    r = api("GET", f"{R(a)}/actions/runs/{a.run}")
+    for j in r.get("jobs", []):
+        print(f"===== Job {j['name']} ({j['status']}) =====")
+        print(api("GET", f"{R(a)}/actions/jobs/{j['id']}/logs", text=True))
+
+
+def watch(a, run_id):
+    last = None
+    while True:
+        r = api("GET", f"{R(a)}/actions/runs/{run_id}")
+        if r["status"] != last:
+            print(f"[{time.strftime('%H:%M:%S')}] {r['workflowName']} #{r['runNumber']}: {r['status']}", flush=True)
+            last = r["status"]
+        if r["status"] in FERTIG:
+            for j in r.get("jobs", []):
+                print(f"  {j['name']}: {j['status']}" + (f" ({j['errorMessage']})" if j.get("errorMessage") else ""))
+            if r["status"] != "success":
+                print(f"Logs: forge run logs {run_id}" + (f" --repo {a.repo}" if a.repo else ""))
+            sys.exit(0 if r["status"] == "success" else 1)
+        time.sleep(10)
+
+
+def run_watch(a):
+    watch(a, a.run)
+
+
+def run_dispatch(a):
+    res = api("POST", f"{R(a)}/actions/dispatch", {"workflowPath": a.workflow, "ref": a.ref})
+    ids = res.get("runIds", [])
+    if not ids:
+        die("Kein Lauf gestartet: hat der Workflow 'workflow_dispatch' als Trigger?")
+    print("Gestartet: " + ", ".join(ids))
+    if a.watch:
+        watch(a, ids[0])
+
+
+def run_retry(a):
+    api("POST", f"{R(a)}/actions/runs/{a.run}/retry", {})
+    print("Neu gestartet.")
+
+
+def run_cancel(a):
+    api("POST", f"{R(a)}/actions/runs/{a.run}/cancel", {})
+    print("Abgebrochen.")
+
+
+def workflows(a):
+    res = api("GET", f"{R(a)}/workflows")
+    for w in res if isinstance(res, list) else res.get("items", []):
+        err = f"  FEHLER: {w['parseError']}" if w.get("parseError") else ""
+        print(f"{w['path']}  ({w['name']}){err}")
+
+
+# ---------------------------------------------------------------- git push
+def push(a):
+    branch = a.branch or subprocess.run(["git", "branch", "--show-current"], capture_output=True, text=True).stdout.strip()
+    if branch in ("main", "master"):
+        die("Nicht direkt auf main pushen: eigenen Branch + Pull Request nehmen.")
+    url = f"{HOST}/{(a.repo or repo_from_git())}.git"
+    sys.exit(subprocess.run(["git", "-c", f"http.extraHeader=Authorization: Bearer {TOKEN}", "push", "-u", url,
+                             f"HEAD:refs/heads/{branch}"]).returncode)
+
+
+def main():
+    p = argparse.ArgumentParser(prog="forge", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--repo")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    pr = sub.add_parser("pr").add_subparsers(dest="sub", required=True)
+    c = pr.add_parser("create"); c.add_argument("--head", required=True); c.add_argument("--base", default="main")
+    c.add_argument("--title", required=True); c.add_argument("--body"); c.add_argument("--body-file"); c.add_argument("--draft", action="store_true")
+    c.set_defaults(fn=pr_create)
+    c = pr.add_parser("list"); c.add_argument("--state", default="open", choices=["open", "closed", "all"]); c.set_defaults(fn=pr_list)
+    for name, fn in (("view", pr_view),):
+        c = pr.add_parser(name); c.add_argument("nr", type=int); c.set_defaults(fn=fn)
+    c = pr.add_parser("approve"); c.add_argument("nr", type=int); c.add_argument("--body"); c.set_defaults(fn=pr_approve)
+    c = pr.add_parser("merge"); c.add_argument("nr", type=int)
+    c.add_argument("--strategy", default="squash", choices=["merge", "squash", "rebase"]); c.add_argument("--keep-branch", action="store_true")
+    c.set_defaults(fn=pr_merge)
+    c = pr.add_parser("comment"); c.add_argument("nr", type=int); c.add_argument("--body", required=True); c.set_defaults(fn=pr_comment)
+
+    run = sub.add_parser("run").add_subparsers(dest="sub", required=True)
+    c = run.add_parser("list"); c.add_argument("--limit", type=int, default=10); c.set_defaults(fn=run_list)
+    for name, fn in (("view", run_view), ("logs", run_logs), ("watch", run_watch), ("retry", run_retry), ("cancel", run_cancel)):
+        c = run.add_parser(name); c.add_argument("run"); c.set_defaults(fn=fn)
+    c = run.add_parser("dispatch"); c.add_argument("--workflow", required=True); c.add_argument("--ref", default="main")
+    c.add_argument("--watch", action="store_true"); c.set_defaults(fn=run_dispatch)
+
+    c = sub.add_parser("workflows"); c.set_defaults(fn=workflows)
+    c = sub.add_parser("push"); c.add_argument("branch", nargs="?"); c.set_defaults(fn=push)
+
+    # --repo darf auch hinter dem Unterbefehl stehen
+    argv = sys.argv[1:]
+    if "--repo" in argv:
+        i = argv.index("--repo"); argv = ["--repo", argv[i + 1]] + argv[:i] + argv[i + 2:]
+    a = p.parse_args(argv)
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
