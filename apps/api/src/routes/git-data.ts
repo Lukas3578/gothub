@@ -562,6 +562,8 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
       }
 
       try {
+        const { resolveRef: resolveBefore } = await import('../git/repository.js');
+        const before = await resolveBefore(access.repository.id, input.branch).catch(() => null);
         const oid = await commitFileChanges(access.repository.id, {
           branch: input.branch,
           ...(input.startBranch !== undefined ? { startBranch: input.startBranch } : {}),
@@ -573,6 +575,15 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
 
         await syncRepositoryMetadata(access.repository.id, { touchPushedAt: true }).catch(() => {});
 
+        // Commit aus dem Web-Editor: Workflows wie bei git push starten.
+        const { triggerWorkflowsForRefUpdate } = await import('../services/workflows.js');
+        await triggerWorkflowsForRefUpdate({
+          repositoryId: access.repository.id,
+          branch: input.branch,
+          oldOid: before,
+          newOid: oid,
+          userId: request.viewer!.id,
+        }).catch((error) => request.log.error({ err: error }, 'Workflows nach Commit nicht gestartet'));
         return { ok: true, commitOid: oid, branch: input.branch, fileCount: changes.length };
       } catch (error) {
         if (error instanceof GitError) throw validationFailed(error.message);
@@ -607,6 +618,8 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
       }
 
       try {
+        const { resolveRef: resolveBefore } = await import('../git/repository.js');
+        const before = await resolveBefore(access.repository.id, input.branch).catch(() => null);
         const oid = await commitFileChange(access.repository.id, {
           branch: input.branch,
           ...(input.startBranch !== undefined ? { startBranch: input.startBranch } : {}),
@@ -619,6 +632,16 @@ export async function registerGitDataRoutes(app: FastifyInstance): Promise<void>
         });
 
         await syncRepositoryMetadata(access.repository.id, { touchPushedAt: true }).catch(() => {});
+
+        // Commit aus dem Web-Editor: Workflows wie bei git push starten.
+        const { triggerWorkflowsForRefUpdate } = await import('../services/workflows.js');
+        await triggerWorkflowsForRefUpdate({
+          repositoryId: access.repository.id,
+          branch: input.branch,
+          oldOid: before,
+          newOid: oid,
+          userId: request.viewer!.id,
+        }).catch((error) => request.log.error({ err: error }, 'Workflows nach Commit nicht gestartet'));
 
         return { ok: true, commitOid: oid, branch: input.branch };
       } catch (error) {

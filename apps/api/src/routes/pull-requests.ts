@@ -372,6 +372,10 @@ export async function registerPullRequestRoutes(app: FastifyInstance): Promise<v
       );
       const { issue, pr } = await loadPr(access.repository.id, Number(request.params.number));
 
+      // Stand des Ziel-Branches vor dem Merge – für die geänderten Pfade der Workflows.
+      const { resolveRef } = await import('../git/repository.js');
+      const baseBefore = await resolveRef(access.repository.id, pr.baseBranch).catch(() => null);
+
       const commitSha = await mergePullRequest({
         pr,
         issue,
@@ -394,6 +398,18 @@ export async function registerPullRequestRoutes(app: FastifyInstance): Promise<v
           const { deleteBranch } = await import('../git/repository.js');
           await deleteBranch(access.repository.id, pr.headBranch).catch(() => {});
         }
+      }
+
+      // Ein Merge ist ein Push auf den Ziel-Branch: Workflows wie bei git push starten.
+      if (commitSha) {
+        const { triggerWorkflowsForRefUpdate } = await import('../services/workflows.js');
+        await triggerWorkflowsForRefUpdate({
+          repositoryId: access.repository.id,
+          branch: pr.baseBranch,
+          oldOid: baseBefore,
+          newOid: commitSha,
+          userId: request.viewer!.id,
+        }).catch((error) => request.log.error({ err: error }, 'Workflows nach Merge nicht gestartet'));
       }
 
       const fullName = `${access.ownerName}/${access.repository.name}`;

@@ -195,6 +195,51 @@ export interface TriggerContext {
  * Prüft alle Workflows eines Repositories gegen ein Ereignis und legt für die
  * passenden einen Lauf an.
  */
+/**
+ * Löst Push-Workflows aus, wenn sich ein Branch NICHT über `git push`
+ * geändert hat – etwa durch einen Merge über die Oberfläche/API oder einen
+ * Commit aus dem Web-Editor. Ohne das startet nach einem Merge kein Build.
+ */
+export async function triggerWorkflowsForRefUpdate(options: {
+  repositoryId: string;
+  branch: string;
+  oldOid: string | null;
+  newOid: string;
+  userId: string | null;
+}): Promise<string[]> {
+  const [repo] = await db
+    .select({ defaultBranch: repositories.defaultBranch, hasActions: repositories.hasActions })
+    .from(repositories)
+    .where(eq(repositories.id, options.repositoryId))
+    .limit(1);
+  if (!repo?.hasActions) return [];
+
+  if (options.branch === repo.defaultBranch) {
+    await syncWorkflows(options.repositoryId, repo.defaultBranch).catch(() => {});
+  }
+
+  let changedPaths: string[] | null = null;
+  if (options.oldOid && options.oldOid !== options.newOid) {
+    const { runGitText } = await import('../git/exec.js');
+    const { repositoryPath } = await import('../git/storage.js');
+    const output = await runGitText(['diff', '--name-only', `${options.oldOid}..${options.newOid}`], {
+      cwd: repositoryPath(options.repositoryId),
+      maxBuffer: 4 * 1024 * 1024,
+    }).catch(() => '');
+    changedPaths = output.split('\n').filter(Boolean);
+  }
+
+  return triggerWorkflows({
+    repositoryId: options.repositoryId,
+    event: 'push',
+    headSha: options.newOid,
+    headBranch: options.branch,
+    tag: null,
+    changedPaths,
+    triggeredById: options.userId,
+  });
+}
+
 export async function triggerWorkflows(context: TriggerContext): Promise<string[]> {
   const repoRows = await db
     .select()
